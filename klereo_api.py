@@ -1,8 +1,9 @@
 import logging
-import requests
 import hashlib
-from homeassistant.exceptions import UpdateFailed
 from .const import KLEREOSERVER, HA_VERSION
+
+# 'requests' is imported inside each method to avoid blocking the HA event loop
+# during the import_module() call at integration load time.
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class KlereoAPI:
         return hashlib.sha1(self.password.encode()).hexdigest()
 
     def get_jwt(self):
+        import requests  # deferred — first import happens in executor thread
         url = f"{self.base_url}/GetJWT.php"
         hashed_password = self.hash_password()
         payload = {
@@ -32,6 +34,7 @@ class KlereoAPI:
         return self.jwt
 
     def get_index(self):
+        import requests  # deferred — first import happens in executor thread
         if not self.jwt:
             self.get_jwt()
         url = f"{self.base_url}/GetIndex.php"
@@ -46,7 +49,8 @@ class KlereoAPI:
 
 
     def get_pool(self):
-
+        import requests  # deferred — first import happens in executor thread
+        from homeassistant.helpers.update_coordinator import UpdateFailed
         LOGGER.info(f"GetPoolDetails #{self.poolid}")
         if not self.jwt:
             self.get_jwt()
@@ -68,6 +72,7 @@ class KlereoAPI:
         return pool
 
     def turn_on_device(self, outIdx):
+        import requests  # deferred — first import happens in executor thread
         LOGGER.info(f"TurnOn #{self.poolid} out{outIdx}")
         if not self.jwt:
             self.get_jwt()
@@ -88,6 +93,7 @@ class KlereoAPI:
         LOGGER.info(f"rep={rep}")
 
     def turn_off_device(self, outIdx):
+        import requests  # deferred — first import happens in executor thread
         LOGGER.info(f"TurnOff #{self.poolid} out{outIdx}")
         if not self.jwt:
             self.get_jwt()

@@ -236,14 +236,14 @@ class TestMaintenanceDetection:
     """get_pool must raise UpdateFailed when the server returns a maintenance response."""
 
     def test_raises_update_failed_on_maintenance(self, authed_api, requests_mock):
-        from homeassistant.exceptions import UpdateFailed
+        from homeassistant.helpers.update_coordinator import UpdateFailed
         requests_mock.post(POOL_URL, json=SAMPLE_MAINTENANCE_RESPONSE)
         with pytest.raises(UpdateFailed):
             authed_api.get_pool()
 
     def test_maintenance_detection_does_not_raise_http_error(self, authed_api, requests_mock):
         """Maintenance responses have HTTP 200 — must not be treated as an HTTP error."""
-        from homeassistant.exceptions import UpdateFailed
+        from homeassistant.helpers.update_coordinator import UpdateFailed
         requests_mock.post(POOL_URL, json=SAMPLE_MAINTENANCE_RESPONSE, status_code=200)
         with pytest.raises(UpdateFailed):
             authed_api.get_pool()
