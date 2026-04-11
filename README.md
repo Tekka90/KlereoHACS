@@ -1,3 +1,8 @@
+# Source !
+This project is a fork of the initial work from Laurent Dousset from Klereo: https://github.com/ldousset-klr/KlereoHACS
+I created this fork to try and continue the implementation leveraging copilot + jeedom existing pluggin : https://github.com/MrWaloo/jeedom-klereo
+I cannot thank enough those 2 projects ! And hopefully, I will manage to get something as evolved in HA too !!
+
 # Home Assistant HACS integration for KLEREO swimming pools
 
 A Home Assistant custom integration (HACS-installable) for the
