@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Any
 
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass, SensorEntityDescription
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -273,6 +274,15 @@ class KlereoSensor(CoordinatorEntity, SensorEntity):
         LOGGER.debug(f"{self._probe_name} type={self._probe_type} → device_class={self.entity_description.device_class}, unit={self.entity_description.native_unit_of_measurement}")
 
     @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._poolid)},
+            name=self.coordinator.data.get("poolNickname", f"Pool {self._poolid}"),
+            serial_number=self.coordinator.data.get("podSerial"),
+            manufacturer="Klereo",
+        )
+
+    @property
     def name(self):
         return self._probe_name
 
@@ -314,6 +324,15 @@ class KlereoParamSensor(CoordinatorEntity, SensorEntity):
         self.entity_description = description
 
     @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._poolid)},
+            name=self.coordinator.data.get("poolNickname", f"Pool {self._poolid}"),
+            serial_number=self.coordinator.data.get("podSerial"),
+            manufacturer="Klereo",
+        )
+
+    @property
     def name(self) -> str:
         return self.entity_description.name
 
@@ -342,6 +361,15 @@ class KlereoEnumSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._poolid = poolid
         self.entity_description = description
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._poolid)},
+            name=self.coordinator.data.get("poolNickname", f"Pool {self._poolid}"),
+            serial_number=self.coordinator.data.get("podSerial"),
+            manufacturer="Klereo",
+        )
 
     @property
     def name(self) -> str:

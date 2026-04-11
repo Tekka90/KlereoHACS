@@ -289,3 +289,50 @@ class TestKlereoEnumSensorDescription:
     def test_all_enum_sensors_have_unique_keys(self):
         keys = [d.key for d in _ENUM_SENSORS]
         assert len(keys) == len(set(keys)), "Duplicate keys in _ENUM_SENSORS"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DeviceInfo — all entity classes must share the same device
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestDeviceInfo:
+    def test_probe_sensor_device_info_identifiers(self, coordinator):
+        sensor = make_sensor(coordinator, probe_index=2)
+        assert (sensor.device_info["identifiers"]) == {("klereo", 12345)}
+
+    def test_probe_sensor_device_info_name(self, coordinator):
+        sensor = make_sensor(coordinator, probe_index=2)
+        assert sensor.device_info["name"] == "Ma piscine (test)"
+
+    def test_probe_sensor_device_info_serial(self, coordinator):
+        sensor = make_sensor(coordinator, probe_index=2)
+        assert sensor.device_info["serial_number"] == "POD-TEST-001"
+
+    def test_probe_sensor_device_info_manufacturer(self, coordinator):
+        sensor = make_sensor(coordinator, probe_index=2)
+        assert sensor.device_info["manufacturer"] == "Klereo"
+
+    def test_param_sensor_device_info_identifiers(self, coordinator):
+        sensor = make_param_sensor(coordinator, "filtration_today_h")
+        assert sensor.device_info["identifiers"] == {("klereo", 12345)}
+
+    def test_enum_sensor_device_info_identifiers(self, coordinator):
+        sensor = make_enum_sensor(coordinator, "pool_mode")
+        assert sensor.device_info["identifiers"] == {("klereo", 12345)}
+
+    def test_all_entity_types_share_same_identifier(self, coordinator):
+        """All entity classes must return the same device identifier so HA groups them."""
+        probe = make_sensor(coordinator, probe_index=2)
+        param = make_param_sensor(coordinator, "filtration_today_h")
+        enum_ = make_enum_sensor(coordinator, "pool_mode")
+        ids = {
+            frozenset(probe.device_info["identifiers"]),
+            frozenset(param.device_info["identifiers"]),
+            frozenset(enum_.device_info["identifiers"]),
+        }
+        assert len(ids) == 1, "Sensor entity classes report different device identifiers"
+
+    def test_fallback_name_when_nickname_absent(self, coordinator):
+        coordinator.data.pop("poolNickname", None)
+        sensor = make_sensor(coordinator, probe_index=2)
+        assert "12345" in sensor.device_info["name"]

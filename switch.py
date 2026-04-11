@@ -1,4 +1,5 @@
 from homeassistant.components.switch import SwitchEntity
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -36,6 +37,15 @@ class KlereoOut(CoordinatorEntity, SwitchEntity):
         self._state = out['status']
         self._realstate = out['realStatus']
         self._poolid = poolid
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._poolid)},
+            name=self.coordinator.data.get("poolNickname", f"Pool {self._poolid}"),
+            serial_number=self.coordinator.data.get("podSerial"),
+            manufacturer="Klereo",
+        )
 
     @property
     def name(self):

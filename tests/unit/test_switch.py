@@ -140,3 +140,28 @@ class TestKlereoOutTurnOff:
         sw.hass.async_add_executor_job = AsyncMock(return_value=None)
         await sw.async_turn_off()
         assert sw._state == "off"
+
+
+# ── DeviceInfo ────────────────────────────────────────────────────────────────
+
+class TestKlereoOutDeviceInfo:
+    def test_device_info_identifiers(self, coordinator, mock_api):
+        sw = make_switch(coordinator, mock_api, out_index=0)
+        assert sw.device_info["identifiers"] == {("klereo", 12345)}
+
+    def test_device_info_name(self, coordinator, mock_api):
+        sw = make_switch(coordinator, mock_api, out_index=0)
+        assert sw.device_info["name"] == "Ma piscine (test)"
+
+    def test_device_info_serial(self, coordinator, mock_api):
+        sw = make_switch(coordinator, mock_api, out_index=0)
+        assert sw.device_info["serial_number"] == "POD-TEST-001"
+
+    def test_device_info_manufacturer(self, coordinator, mock_api):
+        sw = make_switch(coordinator, mock_api, out_index=0)
+        assert sw.device_info["manufacturer"] == "Klereo"
+
+    def test_fallback_name_when_nickname_absent(self, coordinator, mock_api):
+        coordinator.data.pop("poolNickname", None)
+        sw = make_switch(coordinator, mock_api, out_index=0)
+        assert "12345" in sw.device_info["name"]
