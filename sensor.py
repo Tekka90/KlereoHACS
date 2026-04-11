@@ -447,8 +447,11 @@ class KlereoSensor(CoordinatorEntity, SensorEntity):
         probes = self.coordinator.data['probes']
         for probe in probes:
             if probe['index'] == self._index:
-                LOGGER.debug(f"{self._probe_name}={probe['filteredValue']}")
-                return float(probe['filteredValue'])
+                v = probe.get('filteredValue')
+                if v is None:
+                    return None
+                LOGGER.debug(f"{self._probe_name}={v}")
+                return float(v)
         return None
 
     @property

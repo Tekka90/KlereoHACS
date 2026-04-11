@@ -64,6 +64,12 @@ class TestKlereoSensorNativeValue:
         sensor = KlereoSensor(coordinator, probe, 12345)
         assert sensor.native_value is None
 
+    def test_returns_none_when_filtered_value_is_null(self, coordinator):
+        """API can return null for a sensor that isn't measuring yet — must not crash."""
+        coordinator.data["probes"][0]["filteredValue"] = None
+        sensor = make_sensor(coordinator, probe_index=2)
+        assert sensor.native_value is None
+
     def test_reflects_live_coordinator_data_not_init_snapshot(self, coordinator):
         """native_value must re-read coordinator.data on each call."""
         sensor = make_sensor(coordinator, probe_index=2)
