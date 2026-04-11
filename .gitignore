@@ -1,2 +1,4 @@
 __pycache__
 jeedom-klereo
+.venv
+.env

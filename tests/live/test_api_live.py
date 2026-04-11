@@ -1,0 +1,274 @@
+"""Live read-only API validation tests.
+
+These tests call the **real** Klereo Connect API and validate that responses
+conform to the documented structure and data types.
+
+⚠️  NO write endpoints are called (SetOut / SetParam / SetAutoOff).
+    This file must never send commands to a live pool.
+
+Run
+---
+    pytest tests/live/ -v
+    pytest tests/live/ -v -k "TestGetPoolDetails"
+
+All tests are automatically skipped when credentials are absent (see conftest.py).
+"""
+import pytest
+
+# Mark every test in this file as a live test
+pytestmark = pytest.mark.live
+
+# ---------------------------------------------------------------------------
+# Documented valid value sets
+# ---------------------------------------------------------------------------
+VALID_PROBE_TYPES = {0, 1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14}
+VALID_OUT_MODES = {0, 1, 2, 3, 4, 6, 8, 9}
+VALID_STATUS_VALUES = {0, 1, 2}
+VALID_ACCESS_LEVELS = {5, 10, 16, 20, 25}
+VALID_POOL_MODES = {0, 1, 2, 4, 5}
+
+
+# ===========================================================================
+# Authentication
+# ===========================================================================
+
+class TestAuthentication:
+    def test_get_jwt_returns_non_empty_string(self, live_credentials):
+        """GetJWT.php must return a usable JWT string."""
+        from KlereoHACS.klereo_api import KlereoAPI
+
+        api = KlereoAPI(
+            live_credentials["username"],
+            live_credentials["password"],
+            live_credentials["poolid"],
+        )
+        jwt = api.get_jwt()
+        assert jwt is not None
+        assert isinstance(jwt, str)
+        assert len(jwt) > 20, "JWT looks too short to be valid"
+
+    def test_jwt_stored_on_instance(self, live_api):
+        assert live_api.jwt is not None
+        assert isinstance(live_api.jwt, str)
+
+    def test_jwt_does_not_equal_deprecated_token(self, live_credentials):
+        """Sanity-check: we must be using 'jwt', not the deprecated 'token' field."""
+        import requests
+        import hashlib
+        from KlereoHACS.const import KLEREOSERVER, HA_VERSION
+
+        hashed = hashlib.sha1(live_credentials["password"].encode()).hexdigest()
+        resp = requests.post(
+            f"{KLEREOSERVER}/GetJWT.php",
+            data={
+                "login": live_credentials["username"],
+                "password": hashed,
+                "version": HA_VERSION,
+                "app": "api",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["jwt"] != data.get("token"), (
+            "jwt and token fields must differ — if equal, 'token' may have been used"
+        )
+
+
+# ===========================================================================
+# GetIndex
+# ===========================================================================
+
+class TestGetIndex:
+    def test_returns_non_empty_list(self, live_api):
+        result = live_api.get_index()
+        assert isinstance(result, list)
+        assert len(result) >= 1, "Account must have at least one pool"
+
+    def test_each_pool_has_id_system(self, live_api):
+        for pool in live_api.get_index():
+            assert "idSystem" in pool
+            assert isinstance(pool["idSystem"], int)
+            assert pool["idSystem"] > 0
+
+    def test_each_pool_has_nickname(self, live_api):
+        for pool in live_api.get_index():
+            assert "poolNickname" in pool
+            assert isinstance(pool["poolNickname"], str)
+            assert len(pool["poolNickname"]) > 0
+
+    def test_each_pool_has_valid_access_level(self, live_api):
+        for pool in live_api.get_index():
+            assert "access" in pool
+            # Allow slightly higher values from future API versions
+            assert pool["access"] >= 5, "Access level should be >= 5"
+
+    def test_sensor_index_fields_are_integers(self, live_api):
+        """EauCapteur / pHCapteur / TraitCapteur / PressionCapteur must be ints."""
+        for pool in live_api.get_index():
+            for key in ("EauCapteur", "pHCapteur", "TraitCapteur", "PressionCapteur"):
+                if key in pool and pool[key] is not None:
+                    assert isinstance(pool[key], int), f"{key} should be an int"
+
+
+# Module-level fixture: one GetPoolDetails call shared across the whole module.
+@pytest.fixture(scope="module")
+def pool_data(live_api):
+    return live_api.get_pool()
+
+
+# ===========================================================================
+# GetPoolDetails
+# ===========================================================================
+
+class TestGetPoolDetails:
+    """Validates the full GetPoolDetails response for the configured pool."""
+
+    # -- Top-level structure -------------------------------------------------
+
+    def test_response_is_dict(self, pool_data):
+        assert isinstance(pool_data, dict)
+
+    def test_required_top_level_keys(self, pool_data):
+        for key in ("idSystem", "probes", "outs", "params"):
+            assert key in pool_data, f"Missing required key: {key}"
+
+    def test_pool_id_matches_configured(self, pool_data, live_credentials):
+        assert pool_data["idSystem"] == live_credentials["poolid"]
+
+    # -- Probes --------------------------------------------------------------
+
+    def test_probes_is_list(self, pool_data):
+        assert isinstance(pool_data["probes"], list)
+
+    def test_at_least_one_probe(self, pool_data):
+        assert len(pool_data["probes"]) >= 1
+
+    def test_each_probe_has_required_fields(self, pool_data):
+        required = ("index", "type", "filteredValue", "directValue",
+                    "filteredTime", "directTime")
+        for probe in pool_data["probes"]:
+            for field in required:
+                assert field in probe, f"Probe missing field '{field}': {probe}"
+
+    def test_probe_filtered_value_is_numeric(self, pool_data):
+        for probe in pool_data["probes"]:
+            assert isinstance(probe["filteredValue"], (int, float)), (
+                f"probe[{probe['index']}].filteredValue must be numeric, "
+                f"got {type(probe['filteredValue'])}"
+            )
+
+    def test_probe_types_are_in_documented_set(self, pool_data):
+        unknown = [
+            probe["type"]
+            for probe in pool_data["probes"]
+            if probe["type"] not in VALID_PROBE_TYPES
+        ]
+        if unknown:
+            pytest.xfail(
+                f"Unknown probe type(s) {unknown} found — "
+                "update VALID_PROBE_TYPES if this is a new sensor type."
+            )
+
+    def test_probe_indices_are_non_negative_ints(self, pool_data):
+        for probe in pool_data["probes"]:
+            assert isinstance(probe["index"], int)
+            assert probe["index"] >= 0
+
+    def test_eau_capteur_probe_exists_in_probes(self, pool_data):
+        """EauCapteur index must point to an actual probe in probes[]."""
+        eau_idx = pool_data.get("EauCapteur")
+        if eau_idx is not None:
+            probe_indices = [p["index"] for p in pool_data["probes"]]
+            assert eau_idx in probe_indices, (
+                f"EauCapteur={eau_idx} but no probe with that index exists"
+            )
+
+    # -- Outputs -------------------------------------------------------------
+
+    def test_outs_is_list(self, pool_data):
+        assert isinstance(pool_data["outs"], list)
+
+    def test_each_out_has_required_fields(self, pool_data):
+        required = ("index", "type", "mode", "status", "realStatus")
+        for out in pool_data["outs"]:
+            for field in required:
+                assert field in out, f"Output missing field '{field}': {out}"
+
+    def test_out_indices_are_in_valid_range(self, pool_data):
+        for out in pool_data["outs"]:
+            assert 0 <= out["index"] <= 15, (
+                f"Output index {out['index']} outside documented range 0–15"
+            )
+
+    def test_out_status_values_are_valid(self, pool_data):
+        for out in pool_data["outs"]:
+            if out["status"] is not None:
+                assert out["status"] in VALID_STATUS_VALUES, (
+                    f"out[{out['index']}].status={out['status']} "
+                    f"not in {VALID_STATUS_VALUES}"
+                )
+
+    def test_wired_out_modes_are_valid(self, pool_data):
+        """Outputs that are actually wired (type != None) must have a valid mode."""
+        for out in pool_data["outs"]:
+            if out["type"] is not None and out["mode"] is not None:
+                assert out["mode"] in VALID_OUT_MODES, (
+                    f"out[{out['index']}].mode={out['mode']} "
+                    f"not in {VALID_OUT_MODES}"
+                )
+
+    # -- Params --------------------------------------------------------------
+
+    def test_params_is_dict(self, pool_data):
+        assert isinstance(pool_data["params"], dict)
+
+    def test_pool_mode_is_known_value(self, pool_data):
+        params = pool_data["params"]
+        if "PoolMode" in params:
+            assert params["PoolMode"] in VALID_POOL_MODES, (
+                f"Unexpected PoolMode: {params['PoolMode']}"
+            )
+
+    def test_consigne_eau_is_sane(self, pool_data):
+        """Water setpoint must be disabled (-2000), unknown (-1000), or a valid °C."""
+        params = pool_data["params"]
+        if "ConsigneEau" in params:
+            val = params["ConsigneEau"]
+            assert val in (-2000, -1000) or (5 <= val <= 45), (
+                f"ConsigneEau={val} is outside any expected range"
+            )
+
+    def test_consigne_ph_is_sane(self, pool_data):
+        params = pool_data["params"]
+        if "ConsignePH" in params:
+            val = params["ConsignePH"]
+            assert val in (-2000, -1000) or (5.0 <= val <= 9.0), (
+                f"ConsignePH={val} is outside pH range 5–9"
+            )
+
+    def test_consigne_redox_is_sane(self, pool_data):
+        params = pool_data["params"]
+        if "ConsigneRedox" in params:
+            val = params["ConsigneRedox"]
+            assert val in (-2000, -1000) or (100 <= val <= 1000), (
+                f"ConsigneRedox={val} mV is outside expected range"
+            )
+
+
+# ===========================================================================
+# Cross-check: GetIndex vs GetPoolDetails consistency
+# ===========================================================================
+
+class TestCrossCheck:
+    def test_pool_found_in_index(self, live_api, live_credentials):
+        """The configured pool ID must appear in GetIndex results."""
+        pools = live_api.get_index()
+        ids = [p["idSystem"] for p in pools]
+        assert live_credentials["poolid"] in ids, (
+            f"Pool {live_credentials['poolid']} not found in GetIndex response: {ids}"
+        )
+
+    def test_probe_count_consistent(self, pool_data):
+        """GetPoolDetails probe count must be >= 1."""
+        assert len(pool_data["probes"]) >= 1

@@ -420,6 +420,146 @@ When asked how to implement a feature (e.g. "expose pH setpoint" or "add filtrat
 5. **Note what to change in `klereo_api.py`** — new method needed? Return type? Error handling?
 6. **Note what to change in `const.py`** — any new constants?
 7. **Reference `TODO.md`** — point to the relevant TODO item so it can be checked off
+8. **Add tests** — for every code change, add or update tests (see Testing Policy below)
 
 Always write Python code examples using the existing code style (f-strings, `LOGGER.info/debug`,
 `async_add_executor_job`, `CoordinatorEntity`, `coordinator.data` reads).
+
+---
+
+## Test Infrastructure
+
+### Layout
+
+```
+tests/
+  conftest.py          # sys.path setup only — adds project parent to path
+  fixtures.py          # shared sample API response dicts (no pytest fixtures)
+  unit/
+    test_klereo_api.py # KlereoAPI methods, mocked HTTP via requests-mock
+    test_sensor.py     # KlereoSensor entity logic
+    test_switch.py     # KlereoOut entity logic + async turn on/off
+  live/
+    conftest.py        # session-scoped live_api fixture + credential loading
+    test_api_live.py   # read-only validation against the real Klereo API
+```
+
+The `homeassistant.*` package is provided by a **stub package** installed directly into
+`.venv/lib/pythonX.Y/site-packages/homeassistant/`. This is the only reliable way to
+stub HA before pytest imports any integration file — conftest-based approaches fail
+because pytest detects `KlereoHACS/__init__.py` and tries to import the package before
+any conftest can inject stubs into `sys.modules`.
+
+> ⚠️ **Do NOT** attempt to stub `homeassistant` via `conftest.py` (root or tests/).  
+> ⚠️ **Do NOT** add `__init__.py` to `tests/` — it turns the test directory into a
+> sub-package of `KlereoHACS` which repeats the same import ordering problem.  
+> ⚠️ **Do NOT** use `sitecustomize.py` in the venv — it is shadowed by the Homebrew
+> system Python's own `sitecustomize.py` and will not run.
+
+### Running tests
+
+```bash
+# Create / activate the venv (first time only)
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-test.txt
+
+# Unit tests — no network, no credentials required
+.venv/bin/pytest tests/unit/
+
+# Live read-only API tests — requires credentials, never sends write commands
+cp .env.example .env   # fill in KLEREO_USERNAME / KLEREO_PASSWORD / KLEREO_POOLID
+.venv/bin/pytest tests/live/
+
+# All tests
+.venv/bin/pytest
+```
+
+The live tests are **automatically skipped** when `KLEREO_USERNAME` / `KLEREO_PASSWORD` /
+`KLEREO_POOLID` are not set — CI stays green without credentials.
+
+### Shared fixtures (`tests/fixtures.py`)
+
+`fixtures.py` contains plain dicts (not pytest fixtures) that mirror real API responses:
+- `SAMPLE_JWT_RESPONSE` — `GetJWT.php` response
+- `SAMPLE_POOL_DATA` — `GetPoolDetails.php` `response[0]` with probes of types 3, 4, 5, 6
+- `SAMPLE_INDEX_RESPONSE` / `SAMPLE_GET_POOL_RESPONSE` — wrapped versions
+- `SAMPLE_SET_OUT_RESPONSE` — `SetOut.php` response
+- `SAMPLE_MAINTENANCE_RESPONSE` — the maintenance error response
+
+Import them as plain dicts: `from tests.fixtures import SAMPLE_POOL_DATA`.
+
+### Known bugs tracked as `xfail` tests
+
+Bug B1 (wrong `device_class`/`unit_of_measurement` for all probes) is documented as four
+`@pytest.mark.xfail` tests in `tests/unit/test_sensor.py`.  When B1 is fixed, those four
+tests will automatically flip from `xfail` to `passed` — no test update needed.
+
+---
+
+## Testing Policy
+
+**Every code change must include tests.** This is non-negotiable.
+
+### Rules
+
+1. **New `klereo_api.py` method** → add a test class in `tests/unit/test_klereo_api.py`:
+   - One test per request parameter that matters (poolID, outIdx, newState, etc.)
+   - One test verifying the auth header is sent
+   - One test for HTTP error raising
+   - If the method reads from the response, one test checking the returned value
+
+2. **New entity property** (sensor, switch, number, select) → add tests in the
+   corresponding `tests/unit/test_<platform>.py`:
+   - State reads from `coordinator.data`, not from a cached instance variable
+   - `unique_id` format is stable
+   - `extra_state_attributes` contains expected keys
+
+3. **Bug fix** → the test that exposed the bug must turn from `FAILED` to `PASSED`.
+   If the bug was a known `xfail`, remove the `xfail` marker once fixed.
+
+4. **New live validation** → if a new API field or endpoint is used, add a corresponding
+   structural assertion in `tests/live/test_api_live.py`.
+
+5. **New platform file** (e.g. `number.py`, `select.py`) → create
+   `tests/unit/test_<platform>.py` alongside it.
+
+### Adding a new `klereo_api.py` method — checklist
+
+```python
+# In tests/unit/test_klereo_api.py, add a class like:
+class TestMyNewMethod:
+    def test_sends_correct_payload(self, authed_api, requests_mock):
+        m = requests_mock.post(MY_ENDPOINT_URL, json={"status": "ok", ...})
+        authed_api.my_new_method(arg)
+        body = m.last_request.body or ""
+        assert "param=value" in body
+
+    def test_sends_auth_header(self, authed_api, requests_mock):
+        m = requests_mock.post(MY_ENDPOINT_URL, json={"status": "ok", ...})
+        authed_api.my_new_method(arg)
+        assert m.last_request.headers["Authorization"] == "Bearer test-jwt-token"
+
+    def test_raises_on_http_error(self, authed_api, requests_mock):
+        requests_mock.post(MY_ENDPOINT_URL, status_code=500)
+        with pytest.raises(requests.HTTPError):
+            authed_api.my_new_method(arg)
+```
+
+### Adding a new entity — checklist
+
+```python
+# In tests/unit/test_<platform>.py, cover at minimum:
+def test_state_reads_from_coordinator_not_cache(coordinator, ...):
+    entity = MyEntity(coordinator, ...)
+    coordinator.data["key"] = new_value
+    assert entity.state == new_value  # must NOT return stale init-time value
+
+def test_unique_id(coordinator, ...):
+    entity = MyEntity(coordinator, ...)
+    assert entity.unique_id == f"id_klereo{poolid}_expected_suffix"
+
+def test_extra_state_attributes_keys(coordinator, ...):
+    attrs = entity.extra_state_attributes
+    for key in ("ExpectedKey1", "ExpectedKey2"):
+        assert key in attrs
+```

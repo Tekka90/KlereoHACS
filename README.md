@@ -232,6 +232,42 @@ rest:
 
 ---
 
+## Development & Testing
+
+The project uses `pytest` with a local `.venv`. All test dependencies are in
+`requirements-test.txt`.
+
+```bash
+# First-time setup
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-test.txt
+
+# Run unit tests (no network, no credentials needed)
+.venv/bin/pytest tests/unit/
+
+# Run live read-only API tests (validates real API responses, sends NO commands)
+cp .env.example .env     # fill in KLEREO_USERNAME / KLEREO_PASSWORD / KLEREO_POOLID
+.venv/bin/pytest tests/live/
+
+# Run everything
+.venv/bin/pytest
+```
+
+### Test layout
+
+| Path | What it covers |
+|---|---|
+| `tests/unit/test_klereo_api.py` | All `KlereoAPI` methods — HTTP payloads, auth header, SHA-1 hashing, error handling |
+| `tests/unit/test_sensor.py` | `KlereoSensor` entity — state, `unique_id`, attributes; 4 `xfail` specs for bug B1 |
+| `tests/unit/test_switch.py` | `KlereoOut` entity — `is_on`, optimistic state, `async_turn_on/off` |
+| `tests/live/test_api_live.py` | Real API — `GetJWT`, `GetIndex`, `GetPoolDetails` structure, setpoint sanity checks |
+| `tests/fixtures.py` | Shared sample API response dicts used by unit tests |
+
+Live tests are **automatically skipped** when credentials are absent — CI is always green
+without a `.env` file.
+
+---
+
 ## Todo / Roadmap
 
 See [`TODO.md`](./TODO.md) for the full prioritised list of bugs, improvements, and

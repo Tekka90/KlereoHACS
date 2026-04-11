@@ -40,7 +40,7 @@ class KlereoAPI:
         response = requests.post(url, headers=headers)
         response.raise_for_status()
         index = response.json()['response']
-        LOGGER.info(f"Successfully obtained GetIndex: {sensors}")
+        LOGGER.info(f"Successfully obtained GetIndex: {index}")
         return index
 
     def get_pool(self):
