@@ -77,6 +77,22 @@ class TestKlereoSensorNativeValue:
         sensor = make_sensor(coordinator, probe_index=2)
         assert sensor.native_value is None
 
+    def test_returns_none_safely_when_probes_is_null(self, coordinator):
+        """API can return probes=null at boot — must not raise, must return None."""
+        sensor = make_sensor(coordinator, probe_index=2)  # create while data is valid
+        coordinator.data["probes"] = None  # then simulate null probes
+        assert sensor.native_value is None
+
+    def test_returns_none_safely_when_probe_not_found(self, coordinator):
+        sensor = make_sensor(coordinator, probe_index=2)
+        coordinator.data["probes"] = []  # probe disappeared from list
+        assert sensor.native_value is None
+
+    def test_returns_none_for_non_numeric_value(self, coordinator):
+        sensor = make_sensor(coordinator, probe_index=2)
+        coordinator.data["probes"][0]["filteredValue"] = "error"
+        assert sensor.native_value is None
+
     def test_reflects_live_coordinator_data_not_init_snapshot(self, coordinator):
         """native_value must re-read coordinator.data on each call."""
         sensor = make_sensor(coordinator, probe_index=2)
@@ -89,13 +105,73 @@ class TestKlereoSensorIdentifiers:
         sensor = make_sensor(coordinator, probe_index=2)
         assert sensor.unique_id == "id_klereo12345probe2"
 
-    def test_name_contains_pool_id(self, coordinator):
-        sensor = make_sensor(coordinator, probe_index=2)
-        assert "12345" in sensor.name
+    def test_name_is_human_readable_type_name(self, coordinator):
+        # probe_index=4 has type=4 (Redox) — no IORename in fixture
+        sensor = make_sensor(coordinator, probe_index=4)
+        assert sensor.name == "Redox"
 
-    def test_name_contains_probe_index(self, coordinator):
+    def test_name_uses_probe_type_for_ph(self, coordinator):
+        # probe_index=3 has type=3 → "pH" — no IORename in fixture
+        sensor = make_sensor(coordinator, probe_index=3)
+        assert sensor.name == "pH"
+
+    def test_name_uses_probe_type_for_pressure(self, coordinator):
+        # probe_index=5 has type=6 → "Filter Pressure" — no IORename in fixture
+        sensor = make_sensor(coordinator, probe_index=5)
+        assert sensor.name == "Filter Pressure"
+
+    def test_name_iorename_already_present_in_fixture(self, coordinator):
+        # SAMPLE_POOL_DATA has IORename for probe index=2 → "Water Temp"
         sensor = make_sensor(coordinator, probe_index=2)
-        assert "2" in sensor.name
+        assert sensor.name == "Water Temp"
+
+    def test_name_uses_iorename_override_when_present(self, coordinator):
+        coordinator.data["IORename"] = [
+            {"ioType": 2, "ioIndex": 4, "name": "My Custom Redox Sensor"}
+        ]
+        sensor = make_sensor(coordinator, probe_index=4)
+        assert sensor.name == "My Custom Redox Sensor"
+
+    def test_iorename_override_ignored_for_different_index(self, coordinator):
+        coordinator.data["IORename"] = [
+            {"ioType": 2, "ioIndex": 99, "name": "Not This One"}
+        ]
+        sensor = make_sensor(coordinator, probe_index=4)
+        assert sensor.name == "Redox"
+
+    def test_iorename_output_rename_not_applied_to_probe(self, coordinator):
+        # ioType=1 is output rename — must not affect probe name
+        coordinator.data["IORename"] = [
+            {"ioType": 1, "ioIndex": 4, "name": "Output Wrong"}
+        ]
+        sensor = make_sensor(coordinator, probe_index=4)
+        assert sensor.name == "Redox"
+
+    def test_name_disambiguates_duplicate_types(self, coordinator):
+        # Clear IORename so type-name fallback is exercised, then add duplicate type
+        coordinator.data["IORename"] = []
+        coordinator.data["probes"].append({
+            "index": 12, "type": 4,  # second Redox probe
+            "filteredValue": 650.0, "directValue": 650.0,
+            "filteredTime": 10, "directTime": 10,
+        })
+        sensor = make_sensor(coordinator, probe_index=4)
+        assert sensor.name == "Redox (4)"
+
+    def test_name_fallback_for_unknown_type(self, coordinator):
+        coordinator.data["probes"].append({
+            "index": 99, "type": 99,
+            "filteredValue": 0.0, "directValue": 0.0,
+            "filteredTime": 0, "directTime": 0,
+        })
+        probe = {"index": 99, "type": 99}
+        sensor = KlereoSensor(coordinator, probe, 12345)
+        assert sensor.name == "Probe 99"
+
+    def test_unique_id_unchanged_by_naming_fix(self, coordinator):
+        # unique_id must stay stable regardless of name changes
+        sensor = make_sensor(coordinator, probe_index=2)
+        assert sensor.unique_id == "id_klereo12345probe2"
 
 
 class TestKlereoSensorAttributes:
@@ -111,6 +187,14 @@ class TestKlereoSensorAttributes:
         attrs = sensor.extra_state_attributes
         assert "Time" in attrs
         assert attrs["Time"] == 45
+
+    def test_extra_attributes_expose_raw_values(self, coordinator):
+        sensor = make_sensor(coordinator, probe_index=2)
+        attrs = sensor.extra_state_attributes
+        assert "filteredValue" in attrs
+        assert "directValue" in attrs
+        assert attrs["filteredValue"] == 26.3
+        assert attrs["directValue"] == 26.5
 
     def test_extra_attributes_source_filtered_when_filtered_value_present(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=2)

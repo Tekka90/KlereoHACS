@@ -16,6 +16,22 @@ LOGGER = logging.getLogger(__name__)
 # Probe sensors (from pool_data['probes'])
 # ---------------------------------------------------------------------------
 
+# Human-readable names for each probe type (matches Jeedom getSensorTypes())
+_PROBE_TYPE_NAME: dict[int, str] = {
+    0:  "Tech Room Temperature",
+    1:  "Air Temperature",
+    2:  "Water Level",
+    3:  "pH",
+    4:  "Redox",
+    5:  "Water Temperature",
+    6:  "Filter Pressure",
+    10: "Generic Sensor",
+    11: "Flow Rate",
+    12: "Tank Level",
+    13: "Cover Position",
+    14: "Chlorine",
+}
+
 _PROBE_TYPE_MAP: dict[int, SensorEntityDescription] = {
     0:  SensorEntityDescription(key="0",  device_class=SensorDeviceClass.TEMPERATURE, native_unit_of_measurement="°C"),    # Tech room temperature
     1:  SensorEntityDescription(key="1",  device_class=SensorDeviceClass.TEMPERATURE, native_unit_of_measurement="°C"),    # Air temperature
@@ -32,6 +48,38 @@ _PROBE_TYPE_MAP: dict[int, SensorEntityDescription] = {
 }
 
 _DEFAULT_DESCRIPTION = SensorEntityDescription(key="unknown", device_class=None, native_unit_of_measurement=None)
+
+
+def _probe_friendly_name(probe: dict, pool_data: dict) -> str:
+    """Return a human-readable name for a probe.
+
+    Priority:
+    1. User-defined rename from pool_data['IORename'] (ioType=2)
+    2. Type-based name from _PROBE_TYPE_NAME
+    3. Fallback: 'Probe {index}'
+
+    When multiple probes share the same type, append ' ({index})' to disambiguate.
+    """
+    index = probe.get('index')
+    probe_type = probe.get('type')
+
+    # 1 — check IORename
+    for rename in pool_data.get('IORename', []) or []:
+        if rename.get('ioType') == 2 and rename.get('ioIndex') == index:
+            return rename['name']
+
+    # 2 — type-based name
+    base = _PROBE_TYPE_NAME.get(probe_type, f"Probe {index}")
+
+    # disambiguate if multiple probes share the same type
+    probes_of_same_type = [
+        p for p in pool_data.get('probes', []) or []
+        if p.get('type') == probe_type and p.get('type') is not None
+    ]
+    if len(probes_of_same_type) > 1:
+        base = f"{base} ({index})"
+
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -373,8 +421,11 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
     entities: list = []
 
-    # Probe sensors
+    # Probe sensors — skip probes with type=None (unconnected sensor slot)
     for probe in probes:
+        if probe.get('type') is None:
+            LOGGER.debug(f"Skipping null-type probe#{probe.get('index')} for #{poolid}")
+            continue
         LOGGER.info(f"Adding probe sensor for #{poolid}: {probe}")
         entities.append(KlereoSensor(coordinator, probe, poolid))
 
@@ -420,14 +471,17 @@ class KlereoSensor(CoordinatorEntity, SensorEntity):
 
     def __init__(self, coordinator, probe, poolid):
         super().__init__(coordinator)
-        self._probe_name = f"klereo{poolid}probe{probe['index']}"
         self._index = probe['index']
         self._probe_type = int(probe['type'])
         self._poolid = poolid
+        # Stable opaque key used only for unique_id — must never change
+        self._probe_key = f"klereo{poolid}probe{probe['index']}"
+        # Human-readable name, built once from IORename / type map
+        self._friendly_name = _probe_friendly_name(probe, coordinator.data)
         # Assign the EntityDescription — this is what HA uses authoritatively
         # for device_class and native_unit_of_measurement, ignoring the registry cache.
         self.entity_description = _PROBE_TYPE_MAP.get(self._probe_type, _DEFAULT_DESCRIPTION)
-        LOGGER.debug(f"{self._probe_name} type={self._probe_type} → device_class={self.entity_description.device_class}, unit={self.entity_description.native_unit_of_measurement}")
+        LOGGER.debug(f"{self._probe_key} ('{self._friendly_name}') type={self._probe_type} → device_class={self.entity_description.device_class}, unit={self.entity_description.native_unit_of_measurement}")
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -440,38 +494,53 @@ class KlereoSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def name(self):
-        return self._probe_name
+        return self._friendly_name
 
     @property
     def native_value(self):
-        probes = self.coordinator.data['probes']
+        probes = self.coordinator.data.get('probes') or []
         for probe in probes:
-            if probe['index'] == self._index:
-                # filteredValue is only computed for regulation probes; fall back
-                # to directValue for informational sensors (e.g. air temperature).
-                v = probe.get('filteredValue') if probe.get('filteredValue') is not None \
-                    else probe.get('directValue')
+            if probe.get('index') == self._index:
+                # filteredValue is computed only for regulation probes.
+                # Fall back to directValue for informational probes (e.g. air temp).
+                fv = probe.get('filteredValue')
+                dv = probe.get('directValue')
+                v = fv if fv is not None else dv
                 if v is None:
+                    LOGGER.debug(
+                        f"{self._probe_key}: both filteredValue and directValue are null"
+                    )
                     return None
-                LOGGER.debug(f"{self._probe_name}={v}")
-                return float(v)
+                try:
+                    result = float(v)
+                    LOGGER.debug(f"{self._probe_key}={result} ({'filtered' if fv is not None else 'direct'})")
+                    return result
+                except (TypeError, ValueError):
+                    LOGGER.warning(
+                        f"{self._probe_key}: unexpected non-numeric value {v!r} (type={type(v).__name__})"
+                    )
+                    return None
+        LOGGER.debug(f"{self._probe_key}: probe index {self._index} not found in coordinator data")
         return None
 
     @property
     def unique_id(self):
-        return f"id_{self._probe_name}"
+        return f"id_{self._probe_key}"
 
     @property
     def extra_state_attributes(self):
-        probes = self.coordinator.data['probes']
+        probes = self.coordinator.data.get('probes') or []
         for probe in probes:
-            if probe['index'] == self._index:
-                using_direct = (probe.get('filteredValue') is None
-                                and probe.get('directValue') is not None)
+            if probe.get('index') == self._index:
+                fv = probe.get('filteredValue')
+                dv = probe.get('directValue')
+                using_direct = (fv is None and dv is not None)
                 return {
                     'Type': self._probe_type,
                     'Time': probe.get('directTime' if using_direct else 'filteredTime'),
                     'Source': 'direct' if using_direct else 'filtered',
+                    'filteredValue': fv,
+                    'directValue': dv,
                 }
         return None
 
