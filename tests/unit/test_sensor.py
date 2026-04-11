@@ -101,30 +101,29 @@ class TestKlereoSensorAttributes:
         assert sensor.extra_state_attributes is None
 
 
-# ── Known bugs — documented as xfail ─────────────────────────────────────────
-# These tests describe the CORRECT future behaviour.
-# They are marked xfail and will flip to PASS once bug B1 is fixed.
+# ── Device class and unit of measurement (B1 fixed) ──────────────────────────
 
 class TestKlereoSensorDeviceClassBugB1:
-    """B1 — All probes incorrectly use device_class='temperature' and unit='°C'."""
+    """B1 — Probes use device_class and unit_of_measurement from probe['type']."""
 
-    @pytest.mark.xfail(reason="B1: pH probe should have device_class='ph', not 'temperature'")
+    def test_water_temp_probe_device_class_and_unit(self, coordinator):
+        sensor = make_sensor(coordinator, probe_index=2)  # type=5, water temp
+        assert sensor.device_class == "temperature"
+        assert sensor.unit_of_measurement == "°C"
+
     def test_ph_probe_device_class(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=3)  # type=3, pH
         assert sensor.device_class == "ph"
 
-    @pytest.mark.xfail(reason="B1: pH probe should have no unit_of_measurement")
     def test_ph_probe_has_no_unit(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=3)
         assert sensor.unit_of_measurement is None
 
-    @pytest.mark.xfail(reason="B1: Redox probe should have device_class='voltage' and unit='mV'")
     def test_redox_probe_device_class_and_unit(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=4)  # type=4, Redox
         assert sensor.device_class == "voltage"
         assert sensor.unit_of_measurement == "mV"
 
-    @pytest.mark.xfail(reason="B1: pressure probe should have device_class='pressure' and unit='mbar'")
     def test_pressure_probe_device_class_and_unit(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=5)  # type=6, filter pressure
         assert sensor.device_class == "pressure"

@@ -6,6 +6,23 @@ from .const import DOMAIN
 import logging
 LOGGER = logging.getLogger(__name__)
 
+# Maps probe['type'] → (device_class, unit_of_measurement)
+# Source: copilot-instructions probe type table
+_PROBE_TYPE_MAP: dict[int, tuple[str | None, str | None]] = {
+    0:  ("temperature", "°C"),     # Tech room temperature
+    1:  ("temperature", "°C"),     # Air temperature
+    2:  (None,          "%"),      # Water level
+    3:  ("ph",          None),     # pH
+    4:  ("voltage",     "mV"),     # Redox / ORP
+    5:  ("temperature", "°C"),     # Water temperature
+    6:  ("pressure",    "mbar"),   # Filter pressure
+    10: (None,          "%"),      # Generic
+    11: (None,          "m³/h"),   # Flow rate
+    12: (None,          "%"),      # Tank level
+    13: (None,          "%"),      # Cover / curtain position
+    14: (None,          "mg/L"),   # Chlorine
+}
+
 async def async_setup_entry(hass, config_entry, async_add_entities):
 
     LOGGER.info(f"Setting up sensors...")
@@ -51,11 +68,13 @@ class KlereoSensor(CoordinatorEntity):
 
     @property
     def device_class(self):
-        return "temperature"
+        device_class, _ = _PROBE_TYPE_MAP.get(self._type, (None, None))
+        return device_class
 
     @property
     def unit_of_measurement(self):
-        return "°C"
+        _, unit = _PROBE_TYPE_MAP.get(self._type, (None, None))
+        return unit
 
     @property
     def extra_state_attributes(self):
