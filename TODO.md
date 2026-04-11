@@ -7,7 +7,7 @@
 
 ## 🔴 High Priority — Correctness Bugs
 
-- [ ] **[B1] Fix device_class / unit for all probe types**
+- [x] **[B1] Fix device_class / unit for all probe types**
   - `sensor.py`: every probe currently returns `device_class="temperature"` and
     `unit_of_measurement="°C"`.
   - The `probe['type']` field (or the `EauCapteur` / `pHCapteur` / `TraitCapteur` /
@@ -29,11 +29,11 @@
     | 13 | Cover/curtain position | — | `%` |
     | 14 | Chlorine | — | `mg/L` |
 
-- [ ] **[B2] Fix `NameError` in `get_index()` (`klereo_api.py`)**
+- [x] **[B2] Fix `NameError` in `get_index()` (`klereo_api.py`)**
   - `LOGGER.info(f"Successfully obtained GetIndex: {sensors}")` — `sensors` is undefined.
   - Replace with `index` (the variable that was just assigned).
 
-- [ ] **[B5] Implement `_test_credentials()` in the config flow**
+- [x] **[B5] Implement `_test_credentials()` in the config flow**
   - Currently a `pass` — invalid username/password silently succeeds during setup.
   - Should call `get_jwt()` (executor job) and raise `InvalidAuth` on failure.
 
@@ -110,7 +110,7 @@
 
 These features exist in `jeedom-klereo` but are not yet implemented in KlereoHACS:
 
-- [ ] **Expose `params`-based sensors from `GetPoolDetails`**
+- [x] **Expose `params`-based sensors from `GetPoolDetails`**
   The `details['params']` object contains many useful metrics not currently exposed:
   | Param key | Description | Unit |
   |---|---|---|
@@ -128,7 +128,7 @@ These features exist in `jeedom-klereo` but are not yet implemented in KlereoHAC
   | `ConsigneRedox` | Redox regulation setpoint | mV |
   | `ConsigneChlore` | Chlorine regulation setpoint | mg/L |
 
-- [ ] **Expose `params`-based string/enum sensors**
+- [x] **Expose `params`-based string/enum sensors**
   | Param key | Description | Values |
   |---|---|---|
   | `PoolMode` | Pool regulation mode | 0=Off, 1=Eco, 2=Comfort, 4=Winter, 5=Install |

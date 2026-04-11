@@ -1,9 +1,14 @@
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.exceptions import HomeAssistantError
 from .const import DOMAIN,CONF_USERNAME,CONF_PASSWORD,CONF_POOLID,DEF_POOLID
+from .klereo_api import KlereoAPI
 
 import logging
 LOGGER = logging.getLogger(__name__)
+
+class InvalidAuth(HomeAssistantError):
+    """Raised when credentials are invalid."""
 
 @config_entries.HANDLERS.register(DOMAIN)
 class KlereoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -19,8 +24,10 @@ class KlereoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     title=f"Klereo pool #{user_input[CONF_POOLID]}", 
                     data=user_input
                 )
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
             except Exception:
-                errors["base"] = "auth"
+                errors["base"] = "cannot_connect"
         data_schema = {
             vol.Required(CONF_USERNAME): str,
             vol.Required(CONF_PASSWORD): str,
@@ -38,5 +45,12 @@ class KlereoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def _test_credentials(self, username, password, poolid):
-        LOGGER.info(f"Todo: Verifying credentials for user '{username}' for pool #{poolid}")
-        pass
+        LOGGER.info(f"Verifying credentials for user '{username}' for pool #{poolid}")
+        api = KlereoAPI(username, password, poolid)
+        try:
+            jwt = await self.hass.async_add_executor_job(api.get_jwt)
+        except Exception as err:
+            LOGGER.warning(f"Credential test failed: {err}")
+            raise InvalidAuth from err
+        if not jwt:
+            raise InvalidAuth

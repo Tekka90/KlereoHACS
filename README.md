@@ -8,9 +8,14 @@ I cannot thank enough those 2 projects ! And hopefully, I will manage to get som
 A Home Assistant custom integration (HACS-installable) for the
 [Klereo Connect](https://connect.klereo.fr) swimming-pool management system.
 
-It polls the Klereo cloud REST API and exposes your pool's **probes** (temperature, pH,
-Redox…) as HA sensor entities and your pool's **outputs** (filtration, lighting,
-electrolysis, heating…) as HA switch entities — all configurable through the HA UI.
+It polls the Klereo cloud REST API and exposes:
+
+- **Probe sensors** — temperature, pH, Redox, pressure, flow… (one entity per probe, correct `device_class` and unit auto-assigned from probe type)
+- **Params sensors** — filtration/heating run times, chemical consumption, setpoints
+- **Enum sensors** — pool mode, disinfectant type, pH corrector type, heater type
+- **Output switches** — filtration, lighting, electrolysis, heating, auxiliaries…
+
+All entities are configurable through the HA UI, no YAML required.
 
 ---
 
@@ -39,6 +44,81 @@ so you no longer need to look this up manually.
 For now, the easiest method is to open the Klereo web app in your browser, open DevTools
 (F12), go to the **Network** tab, and look for the `GetIndex.php` or `GetPoolDetails.php`
 request to find your `idSystem`.
+
+---
+
+## Exposed Entities
+
+### Probe sensors
+
+One sensor is created per probe returned by `GetPoolDetails`. The `device_class` and unit
+are assigned automatically from the probe's `type` field:
+
+| `probe.type` | Meaning | `device_class` | Unit |
+|---|---|---|---|
+| 0 | Tech room temperature | `temperature` | °C |
+| 1 | Air temperature | `temperature` | °C |
+| 2 | Water level | — | % |
+| 3 | pH | `ph` | *(none)* |
+| 4 | Redox / ORP | `voltage` | mV |
+| 5 | Water temperature | `temperature` | °C |
+| 6 | Filter pressure | `pressure` | mbar |
+| 10 | Generic | — | % |
+| 11 | Flow rate | — | m³/h |
+| 12 | Tank level | — | % |
+| 13 | Cover / curtain position | — | % |
+| 14 | Chlorine | — | mg/L |
+
+Each probe sensor also exposes `filteredTime` and `type` as extra state attributes.
+
+### Params sensors (numeric)
+
+Derived from `GetPoolDetails` → `params`. Each sensor is **only created if the
+corresponding data is present** in the API response, so pools without heating or
+electrolysis will simply not have those sensors.
+
+| Entity name | Source field(s) | Unit | `state_class` |
+|---|---|---|---|
+| Filtration Today | `Filtration_TodayTime` ÷ 3600 | h | `total_increasing` |
+| Filtration Total | `Filtration_TotalTime` ÷ 3600 | h | `total_increasing` |
+| pH- Consumed Today | `PHMinus_TodayTime × PHMinus_Debit ÷ 36` | mL | `total_increasing` |
+| pH- Consumed Total | `PHMinus_TotalTime × PHMinus_Debit ÷ 36000` | L | `total_increasing` |
+| Chlorine Production Today | `Elec_GramDone ÷ 1000` | g | `total_increasing` |
+| Liquid Chlorine Consumed Today | `ElectroChlore_TodayTime × Chlore_Debit ÷ 36` | mL | `total_increasing` |
+| Liquid Chlorine Consumed Total | `ElectroChlore_TotalTime × Chlore_Debit ÷ 36000` | L | `total_increasing` |
+| Heating Today | `Chauff_TodayTime` ÷ 3600 | h | `total_increasing` |
+| Heating Total | `Chauff_TotalTime` ÷ 3600 | h | `total_increasing` |
+| Heating Setpoint | `ConsigneEau` | °C | `measurement` |
+| pH Setpoint | `ConsignePH` | *(none)* | `measurement` |
+| Redox Setpoint | `ConsigneRedox` | mV | `measurement` |
+| Chlorine Setpoint | `ConsigneChlore` | mg/L | `measurement` |
+
+### Params sensors (enum / string)
+
+Also derived from `params`. Only created when the key is present in the API response.
+
+| Entity name | `params` key | Possible values |
+|---|---|---|
+| Pool Mode | `PoolMode` | Off, Eco, Comfort, Winter, Install |
+| Disinfectant Type | `TraitMode` | None, Liquid chlorine, Electrolyser, KL1, Active oxygen, Bromine, KL2, KL3 |
+| pH Corrector Type | `pHMode` | None, pH-Minus, pH-Plus |
+| Heater Type | `HeaterMode` | None, ON/OFF heat pump, EasyTherm, ON/OFF no setpoint, Other heat pump |
+
+### Output switches
+
+One switch per output returned by `GetPoolDetails`. Outputs are named `klereo<poolid>out<n>`.
+
+| Index | Output |
+|---|---|
+| 0 | Lighting |
+| 1 | Filtration |
+| 2 | pH corrector |
+| 3 | Disinfectant / Electrolysis |
+| 4 | Heating |
+| 5–7 | Auxiliary 1–3 |
+| 8 | Flocculant |
+| 9–14 | Auxiliary 4–9 |
+| 15 | Hybrid disinfectant |
 
 ---
 
@@ -258,7 +338,7 @@ cp .env.example .env     # fill in KLEREO_USERNAME / KLEREO_PASSWORD / KLEREO_PO
 | Path | What it covers |
 |---|---|
 | `tests/unit/test_klereo_api.py` | All `KlereoAPI` methods — HTTP payloads, auth header, SHA-1 hashing, error handling |
-| `tests/unit/test_sensor.py` | `KlereoSensor` entity — state, `unique_id`, attributes; 4 `xfail` specs for bug B1 |
+| `tests/unit/test_sensor.py` | `KlereoSensor` entity — `native_value`, `unique_id`, `entity_description`, probe type map |
 | `tests/unit/test_switch.py` | `KlereoOut` entity — `is_on`, optimistic state, `async_turn_on/off` |
 | `tests/live/test_api_live.py` | Real API — `GetJWT`, `GetIndex`, `GetPoolDetails` structure, setpoint sanity checks |
 | `tests/fixtures.py` | Shared sample API response dicts used by unit tests |

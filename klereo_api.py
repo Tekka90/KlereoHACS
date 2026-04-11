@@ -43,6 +43,7 @@ class KlereoAPI:
         LOGGER.info(f"Successfully obtained GetIndex: {index}")
         return index
 
+
     def get_pool(self):
 
         LOGGER.info(f"GetPoolDetails #{self.poolid}")

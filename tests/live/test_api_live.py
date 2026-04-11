@@ -26,6 +26,9 @@ VALID_OUT_MODES = {0, 1, 2, 3, 4, 6, 8, 9}
 VALID_STATUS_VALUES = {0, 1, 2}
 VALID_ACCESS_LEVELS = {5, 10, 16, 20, 25}
 VALID_POOL_MODES = {0, 1, 2, 4, 5}
+VALID_TRAIT_MODES = {0, 1, 2, 3, 4, 5, 6, 8}
+VALID_PH_MODES = {0, 1, 2}
+VALID_HEATER_MODES = {0, 1, 2, 3, 4}
 
 
 # ===========================================================================
@@ -254,6 +257,101 @@ class TestGetPoolDetails:
             assert val in (-2000, -1000) or (100 <= val <= 1000), (
                 f"ConsigneRedox={val} mV is outside expected range"
             )
+
+    def test_filtration_today_time_is_non_negative(self, pool_data):
+        params = pool_data["params"]
+        if "Filtration_TodayTime" in params:
+            assert params["Filtration_TodayTime"] >= 0
+
+    def test_filtration_total_time_is_non_negative(self, pool_data):
+        params = pool_data["params"]
+        if "Filtration_TotalTime" in params:
+            assert params["Filtration_TotalTime"] >= 0
+
+    def test_filtration_total_gte_today(self, pool_data):
+        params = pool_data["params"]
+        if "Filtration_TodayTime" in params and "Filtration_TotalTime" in params:
+            assert params["Filtration_TotalTime"] >= params["Filtration_TodayTime"], (
+                "Total filtration time must be >= today's filtration time"
+            )
+
+    def test_trait_mode_is_known_value(self, pool_data):
+        params = pool_data["params"]
+        if "TraitMode" in params:
+            assert params["TraitMode"] in VALID_TRAIT_MODES, (
+                f"Unexpected TraitMode: {params['TraitMode']}"
+            )
+
+    def test_ph_mode_is_known_value(self, pool_data):
+        params = pool_data["params"]
+        if "pHMode" in params:
+            assert params["pHMode"] in VALID_PH_MODES, (
+                f"Unexpected pHMode: {params['pHMode']}"
+            )
+
+    def test_heater_mode_is_known_value(self, pool_data):
+        params = pool_data["params"]
+        if "HeaterMode" in params:
+            assert params["HeaterMode"] in VALID_HEATER_MODES, (
+                f"Unexpected HeaterMode: {params['HeaterMode']}"
+            )
+
+    def test_elec_gram_done_is_non_negative(self, pool_data):
+        params = pool_data["params"]
+        if "Elec_GramDone" in params:
+            assert params["Elec_GramDone"] >= 0, (
+                f"Elec_GramDone={params['Elec_GramDone']} must be non-negative"
+            )
+
+    def test_phminus_debit_is_positive_when_present(self, pool_data):
+        params = pool_data["params"]
+        if "PHMinus_Debit" in params and params["PHMinus_Debit"] is not None:
+            assert params["PHMinus_Debit"] > 0, (
+                "PHMinus_Debit (flow rate) must be positive"
+            )
+
+
+# ===========================================================================
+# Params → sensor entity smoke test (unit-level cross-check with live data)
+# ===========================================================================
+
+class TestParamSensorsWithLiveData:
+    """Instantiate the actual HA sensor classes with live coordinator data
+    and verify they produce sane values — no mocking, pure logic check."""
+
+    def test_filtration_today_sensor_produces_hours(self, pool_data):
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+
+        params = pool_data.get("params", {})
+        if "Filtration_TodayTime" not in params:
+            pytest.skip("Filtration_TodayTime not in live data")
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _PARAM_SENSORS if d.key == "filtration_today_h")
+        sensor = KlereoParamSensor(coord, pool_data["idSystem"], desc)
+        val = sensor.native_value
+        assert val is not None
+        assert 0 <= val <= 24, f"Filtration today {val}h is outside 0–24h range"
+
+    def test_pool_mode_enum_sensor_produces_known_string(self, pool_data):
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+
+        params = pool_data.get("params", {})
+        if "PoolMode" not in params:
+            pytest.skip("PoolMode not in live data")
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _ENUM_SENSORS if d.key == "pool_mode")
+        sensor = KlereoEnumSensor(coord, pool_data["idSystem"], desc)
+        val = sensor.native_value
+        assert val is not None
+        assert val in desc.options or "Unknown" in val, (
+            f"Pool mode '{val}' not in known options {desc.options}"
+        )
 
 
 # ===========================================================================

@@ -100,8 +100,17 @@ SAMPLE_POOL_DATA = {
         },
     ],
     "params": {
-        "Filtration_TodayTime": 14400,
-        "Filtration_TotalTime": 3600000,
+        "Filtration_TodayTime": 14400,       # 4 h
+        "Filtration_TotalTime": 3600000,     # 1000 h
+        "PHMinus_TodayTime": 120,            # 2 min
+        "PHMinus_Debit": 180,                # 180 mL/h
+        "PHMinus_TotalTime": 7200,
+        "Elec_GramDone": 5000,               # 5 g
+        "ElectroChlore_TodayTime": 60,
+        "ElectroChlore_TotalTime": 3600,
+        "Chlore_Debit": 120,
+        "Chauff_TodayTime": 3600,            # 1 h
+        "Chauff_TotalTime": 360000,
         "PoolMode": 2,
         "TraitMode": 1,
         "pHMode": 1,
