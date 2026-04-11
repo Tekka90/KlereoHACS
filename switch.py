@@ -19,6 +19,9 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     # Add switches
     switches = []
     for out in outs:
+        if out.get('type') is None:  # unconnected/unwired output — skip
+            LOGGER.debug(f"Skipping null-type out#{out['index']} for #{poolid}")
+            continue
         LOGGER.info(f"Adding out for #{poolid}: {out}")
         switches.append(KlereoOut(api,coordinator,out,poolid))
     #add switch enitities
@@ -56,12 +59,13 @@ class KlereoOut(CoordinatorEntity, SwitchEntity):
         outs = self.coordinator.data['outs']
         for out in outs:
             if out['index'] == self._index:
-                LOGGER.debug(f"{self._name}={out['status']}, state={self._state}")
+                LOGGER.debug(f"{self._name} status={out['status']} realStatus={out['realStatus']} state={self._state}")
                 if self._state == "on":
                     return True
                 if self._state == "off":
                     return False
-                return out['status']==1
+                # No optimistic override — use the actual relay state
+                return out['realStatus'] == 1
         return None
 
     @property

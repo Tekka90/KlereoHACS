@@ -154,3 +154,17 @@ SAMPLE_MAINTENANCE_RESPONSE = {
     "status": "error",
     "detail": "maintenance",
 }
+
+# ── Hybrid pool variant ───────────────────────────────────────────────────────
+# Same as SAMPLE_POOL_DATA but with HybrideMode=1 and ExtraParams.
+# Used to test that chlorine sensors use HybChl_* instead of ElectroChlore_*.
+import copy as _copy
+SAMPLE_HYBRID_POOL_DATA = _copy.deepcopy(SAMPLE_POOL_DATA)
+SAMPLE_HYBRID_POOL_DATA["HybrideMode"] = 1
+SAMPLE_HYBRID_POOL_DATA["ExtraParams"] = {
+    "HybChl_TodayTime": 120,    # 120 s today
+    "HybChl_TotalTime": 7200,   # 7200 s total
+}
+# Remove ElectroChlore keys to prove the sensor doesn't fall back to them
+del SAMPLE_HYBRID_POOL_DATA["params"]["ElectroChlore_TodayTime"]
+del SAMPLE_HYBRID_POOL_DATA["params"]["ElectroChlore_TotalTime"]

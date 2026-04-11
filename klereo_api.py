@@ -1,6 +1,7 @@
 import logging
 import requests
 import hashlib
+from homeassistant.exceptions import UpdateFailed
 from .const import KLEREOSERVER, HA_VERSION
 
 LOGGER = logging.getLogger(__name__)
@@ -60,6 +61,9 @@ class KlereoAPI:
         response = requests.post(url, headers=headers, data=payload)
         response.raise_for_status()
         pooldetails = response.json()
+        if pooldetails.get('status') == 'error' and pooldetails.get('detail') == 'maintenance':
+            LOGGER.warning("Klereo server maintenance in progress — skipping update")
+            raise UpdateFailed("Klereo server maintenance")
         pool=pooldetails['response'][0]
         return pool
 
@@ -74,8 +78,9 @@ class KlereoAPI:
         payload={
             'poolID': self.poolid,
             'outIdx': outIdx,
-            'newMode': 2,
-            'newState': 1
+            'newMode': 0,
+            'newState': 1,
+            'comMode': 1
         }
         response = requests.post(url, headers=headers, data=payload)
         response.raise_for_status()
@@ -93,8 +98,9 @@ class KlereoAPI:
         payload={
             'poolID': self.poolid,
             'outIdx': outIdx,
-            'newMode': 2,
-            'newState': 0
+            'newMode': 0,
+            'newState': 0,
+            'comMode': 1
         }
         response = requests.post(url, headers=headers, data=payload)
         response.raise_for_status()

@@ -29,6 +29,8 @@ VALID_POOL_MODES = {0, 1, 2, 4, 5}
 VALID_TRAIT_MODES = {0, 1, 2, 3, 4, 5, 6, 8}
 VALID_PH_MODES = {0, 1, 2}
 VALID_HEATER_MODES = {0, 1, 2, 3, 4}
+VALID_PRODUCT_IDX = {0, 1, 2, 3, 4, 5, 6, 7}
+VALID_PUMP_TYPES = {0, 1, 2, 7}
 
 
 # ===========================================================================
@@ -310,6 +312,230 @@ class TestGetPoolDetails:
                 "PHMinus_Debit (flow rate) must be positive"
             )
 
+    # -- Null-type outputs ---------------------------------------------------
+
+    def test_null_type_outs_have_no_other_required_fields(self, pool_data):
+        """Outputs whose type is None are unconnected — we must not crash reading them."""
+        for out in pool_data["outs"]:
+            if out.get("type") is None:
+                # Merely verify the index field is present and sane
+                assert "index" in out
+                assert 0 <= out["index"] <= 15
+
+    def test_wired_outs_have_non_none_type(self, pool_data):
+        """At least one output should be wired (type != None) on a real installation."""
+        wired = [o for o in pool_data["outs"] if o.get("type") is not None]
+        assert len(wired) >= 1, "Expected at least one wired output"
+
+    def test_real_status_field_present_and_valid(self, pool_data):
+        """realStatus must be present on every output (wired or not)."""
+        for out in pool_data["outs"]:
+            assert "realStatus" in out, f"out[{out['index']}] missing realStatus"
+            if out["realStatus"] is not None:
+                assert out["realStatus"] in VALID_STATUS_VALUES, (
+                    f"out[{out['index']}].realStatus={out['realStatus']} not in {VALID_STATUS_VALUES}"
+                )
+
+    # -- Setpoint sentinels --------------------------------------------------
+
+    def test_consigne_eau_sentinel_maps_to_none_in_entity(self, pool_data):
+        """When ConsigneEau is -2000 or -1000, the sensor entity must return None."""
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+
+        params = pool_data.get("params", {})
+        val = params.get("ConsigneEau")
+        if val not in (-2000, -1000):
+            pytest.skip("ConsigneEau is not a sentinel value on this pool")
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _PARAM_SENSORS if d.key == "setpoint_water_temp")
+        sensor = KlereoParamSensor(coord, pool_data["idSystem"], desc)
+        assert sensor.native_value is None, (
+            f"Sentinel value {val} must map to None, got {sensor.native_value!r}"
+        )
+
+    def test_valid_consigne_eau_returns_float(self, pool_data):
+        """When ConsigneEau is a real setpoint, the sensor entity must return a float."""
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+
+        params = pool_data.get("params", {})
+        val = params.get("ConsigneEau")
+        if val is None or val in (-2000, -1000):
+            pytest.skip("ConsigneEau not a valid setpoint on this pool")
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _PARAM_SENSORS if d.key == "setpoint_water_temp")
+        sensor = KlereoParamSensor(coord, pool_data["idSystem"], desc)
+        result = sensor.native_value
+        assert isinstance(result, float), f"Expected float, got {type(result)}"
+
+    # -- HybrideMode / ExtraParams -------------------------------------------
+
+    def test_hybride_mode_field_type(self, pool_data):
+        """HybrideMode, when present, must be 0 or 1."""
+        if "HybrideMode" not in pool_data:
+            pytest.skip("HybrideMode not present on this pool")
+        assert pool_data["HybrideMode"] in (0, 1), (
+            f"HybrideMode={pool_data['HybrideMode']} must be 0 or 1"
+        )
+
+    def test_hybrid_pool_has_extra_params(self, pool_data):
+        """A hybrid (HybrideMode==1) pool must have ExtraParams with the hybrid keys."""
+        if pool_data.get("HybrideMode") != 1:
+            pytest.skip("Pool is not in hybrid mode")
+        extra = pool_data.get("ExtraParams", {})
+        assert "HybChl_TodayTime" in extra, "Hybrid pool must have HybChl_TodayTime in ExtraParams"
+        assert "HybChl_TotalTime" in extra, "Hybrid pool must have HybChl_TotalTime in ExtraParams"
+        assert extra["HybChl_TodayTime"] >= 0
+        assert extra["HybChl_TotalTime"] >= extra["HybChl_TodayTime"]
+
+    # -- Alerts structure ----------------------------------------------------
+
+    def test_alerts_field_is_list(self, pool_data):
+        """alerts must be a list (possibly empty)."""
+        assert isinstance(pool_data.get("alerts", []), list)
+
+    def test_each_alert_has_code_and_param(self, pool_data):
+        """Every alert object must have a 'code' integer."""
+        for alert in pool_data.get("alerts", []):
+            assert "code" in alert, f"Alert missing 'code' field: {alert}"
+            assert isinstance(alert["code"], int)
+
+    def test_alert_count_sensor_matches_alerts_list_length(self, pool_data):
+        """KlereoAlertCountSensor.native_value must equal len(pool_data['alerts'])."""
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import KlereoAlertCountSensor
+
+        coord = MagicMock()
+        coord.data = pool_data
+        sensor = KlereoAlertCountSensor(coord, pool_data["idSystem"])
+        assert sensor.native_value == len(pool_data.get("alerts", []))
+
+    def test_alerts_string_sensor_is_non_empty_string(self, pool_data):
+        """The 'alerts' enum sensor must always return a non-empty string."""
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _ENUM_SENSORS if d.key == "alerts")
+        sensor = KlereoEnumSensor(coord, pool_data["idSystem"], desc)
+        val = sensor.native_value
+        assert isinstance(val, str) and len(val) > 0
+
+    # -- Diagnostic fields ---------------------------------------------------
+
+    def test_product_idx_field_type(self, pool_data):
+        if "ProductIdx" not in pool_data:
+            pytest.skip("ProductIdx not in live data")
+        assert pool_data["ProductIdx"] in VALID_PRODUCT_IDX, (
+            f"Unknown ProductIdx: {pool_data['ProductIdx']}"
+        )
+
+    def test_product_idx_sensor_returns_known_string(self, pool_data):
+        if "ProductIdx" not in pool_data:
+            pytest.skip("ProductIdx not in live data")
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _ENUM_SENSORS if d.key == "product_idx")
+        sensor = KlereoEnumSensor(coord, pool_data["idSystem"], desc)
+        val = sensor.native_value
+        assert val is not None
+        assert isinstance(val, str)
+
+    def test_pump_type_field_type(self, pool_data):
+        if "PumpType" not in pool_data:
+            pytest.skip("PumpType not in live data")
+        assert pool_data["PumpType"] in VALID_PUMP_TYPES, (
+            f"Unknown PumpType: {pool_data['PumpType']}"
+        )
+
+    def test_pump_type_sensor_returns_known_string(self, pool_data):
+        if "PumpType" not in pool_data:
+            pytest.skip("PumpType not in live data")
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _ENUM_SENSORS if d.key == "pump_type")
+        sensor = KlereoEnumSensor(coord, pool_data["idSystem"], desc)
+        val = sensor.native_value
+        assert val is not None
+        assert isinstance(val, str)
+
+    def test_is_low_salt_field_type(self, pool_data):
+        if "isLowSalt" not in pool_data:
+            pytest.skip("isLowSalt not in live data")
+        assert pool_data["isLowSalt"] in (0, 1), (
+            f"isLowSalt must be 0 or 1, got {pool_data['isLowSalt']}"
+        )
+
+    # -- Chlorine runtime params ---------------------------------------------
+
+    def test_chlore_today_time_is_non_negative(self, pool_data):
+        params = pool_data["params"]
+        if "ElectroChlore_TodayTime" not in params:
+            pytest.skip("ElectroChlore_TodayTime not in live data")
+        assert params["ElectroChlore_TodayTime"] >= 0
+
+    def test_chlore_total_time_gte_today(self, pool_data):
+        params = pool_data["params"]
+        if "ElectroChlore_TotalTime" not in params or "ElectroChlore_TodayTime" not in params:
+            pytest.skip("ElectroChlore_Total/Today not both in live data")
+        assert params["ElectroChlore_TotalTime"] >= params["ElectroChlore_TodayTime"]
+
+    def test_chlore_today_h_sensor_produces_hours(self, pool_data):
+        params = pool_data.get("params", {})
+        if "ElectroChlore_TodayTime" not in params:
+            pytest.skip("ElectroChlore_TodayTime not in live data")
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _PARAM_SENSORS if d.key == "chlore_today_h")
+        sensor = KlereoParamSensor(coord, pool_data["idSystem"], desc)
+        val = sensor.native_value
+        assert val is not None
+        assert 0 <= val <= 24, f"chlore_today_h={val}h outside 0–24h range"
+
+    # -- HeaterMode == 4 (aqPACType) -----------------------------------------
+
+    def test_heater_mode_4_has_aqpactype(self, pool_data):
+        """When HeaterMode is 4, aqPACType must be present and 0 or 1."""
+        params = pool_data.get("params", {})
+        if params.get("HeaterMode") != 4:
+            pytest.skip("HeaterMode != 4 on this pool")
+        assert "aqPACType" in params, "HeaterMode==4 requires aqPACType in params"
+        assert params["aqPACType"] in (0, 1), (
+            f"aqPACType must be 0 or 1, got {params['aqPACType']}"
+        )
+
+    def test_heater_mode_4_sensor_returns_heat_pump_string(self, pool_data):
+        params = pool_data.get("params", {})
+        if params.get("HeaterMode") != 4:
+            pytest.skip("HeaterMode != 4 on this pool")
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _ENUM_SENSORS if d.key == "heater_mode")
+        sensor = KlereoEnumSensor(coord, pool_data["idSystem"], desc)
+        val = sensor.native_value
+        assert val is not None
+        assert "heat pump" in val.lower(), (
+            f"HeaterMode==4 should return a heat pump label, got {val!r}"
+        )
+
 
 # ===========================================================================
 # Params → sensor entity smoke test (unit-level cross-check with live data)
@@ -335,6 +561,57 @@ class TestParamSensorsWithLiveData:
         assert val is not None
         assert 0 <= val <= 24, f"Filtration today {val}h is outside 0–24h range"
 
+    def test_setpoint_water_temp_not_sentinel(self, pool_data):
+        """If ConsigneEau is a real value, the sensor must not return -2000 or -1000."""
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+
+        params = pool_data.get("params", {})
+        if "ConsigneEau" not in params:
+            pytest.skip("ConsigneEau not in live data")
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _PARAM_SENSORS if d.key == "setpoint_water_temp")
+        sensor = KlereoParamSensor(coord, pool_data["idSystem"], desc)
+        val = sensor.native_value
+        if val is not None:
+            assert val not in (-2000, -1000), (
+                f"Sentinel value {val} must not be exposed as the sensor state"
+            )
+
+    def test_setpoint_ph_not_sentinel(self, pool_data):
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+
+        params = pool_data.get("params", {})
+        if "ConsignePH" not in params:
+            pytest.skip("ConsignePH not in live data")
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _PARAM_SENSORS if d.key == "setpoint_ph")
+        sensor = KlereoParamSensor(coord, pool_data["idSystem"], desc)
+        val = sensor.native_value
+        if val is not None:
+            assert val not in (-2000, -1000)
+
+    def test_setpoint_redox_not_sentinel(self, pool_data):
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+
+        params = pool_data.get("params", {})
+        if "ConsigneRedox" not in params:
+            pytest.skip("ConsigneRedox not in live data")
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _PARAM_SENSORS if d.key == "setpoint_redox")
+        sensor = KlereoParamSensor(coord, pool_data["idSystem"], desc)
+        val = sensor.native_value
+        if val is not None:
+            assert val not in (-2000, -1000)
+
     def test_pool_mode_enum_sensor_produces_known_string(self, pool_data):
         from unittest.mock import MagicMock
         from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
@@ -352,6 +629,35 @@ class TestParamSensorsWithLiveData:
         assert val in desc.options or "Unknown" in val, (
             f"Pool mode '{val}' not in known options {desc.options}"
         )
+
+    def test_heater_mode_enum_sensor_produces_known_string(self, pool_data):
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+
+        params = pool_data.get("params", {})
+        if "HeaterMode" not in params:
+            pytest.skip("HeaterMode not in live data")
+
+        coord = MagicMock()
+        coord.data = pool_data
+        desc = next(d for d in _ENUM_SENSORS if d.key == "heater_mode")
+        sensor = KlereoEnumSensor(coord, pool_data["idSystem"], desc)
+        val = sensor.native_value
+        assert val is not None
+        assert isinstance(val, str)
+        # Regardless of aqPACType, the value must always be a non-empty string
+        assert len(val) > 0
+
+    def test_alert_count_sensor_is_non_negative_int(self, pool_data):
+        from unittest.mock import MagicMock
+        from KlereoHACS.sensor import KlereoAlertCountSensor
+
+        coord = MagicMock()
+        coord.data = pool_data
+        sensor = KlereoAlertCountSensor(coord, pool_data["idSystem"])
+        val = sensor.native_value
+        assert isinstance(val, int)
+        assert val >= 0
 
 
 # ===========================================================================

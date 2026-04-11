@@ -13,6 +13,7 @@ from tests.fixtures import (
     SAMPLE_GET_POOL_RESPONSE,
     SAMPLE_INDEX_RESPONSE,
     SAMPLE_JWT_RESPONSE,
+    SAMPLE_MAINTENANCE_RESPONSE,
     SAMPLE_SET_OUT_RESPONSE,
 )
 
@@ -197,3 +198,53 @@ class TestTurnOffDevice:
         authed_api.turn_off_device(0)
         body = m.last_request.body or ""
         assert "poolID=12345" in body
+
+
+# ── SetOut payload correctness (newMode=0 Manual, comMode=1) ──────────────────
+
+class TestSetOutPayloadCorrectness:
+    """Verify that turn_on and turn_off send newMode=0 (Manual) and comMode=1."""
+
+    def test_turn_on_uses_manual_mode(self, authed_api, requests_mock):
+        m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        authed_api.turn_on_device(1)
+        body = m.last_request.body or ""
+        assert "newMode=0" in body, "turn_on must use newMode=0 (Manual), not Timer"
+
+    def test_turn_off_uses_manual_mode(self, authed_api, requests_mock):
+        m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        authed_api.turn_off_device(1)
+        body = m.last_request.body or ""
+        assert "newMode=0" in body, "turn_off must use newMode=0 (Manual), not Timer"
+
+    def test_turn_on_sends_com_mode_1(self, authed_api, requests_mock):
+        m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        authed_api.turn_on_device(1)
+        body = m.last_request.body or ""
+        assert "comMode=1" in body
+
+    def test_turn_off_sends_com_mode_1(self, authed_api, requests_mock):
+        m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        authed_api.turn_off_device(1)
+        body = m.last_request.body or ""
+        assert "comMode=1" in body
+
+
+# ── Maintenance window detection ──────────────────────────────────────────────
+
+class TestMaintenanceDetection:
+    """get_pool must raise UpdateFailed when the server returns a maintenance response."""
+
+    def test_raises_update_failed_on_maintenance(self, authed_api, requests_mock):
+        from homeassistant.exceptions import UpdateFailed
+        requests_mock.post(POOL_URL, json=SAMPLE_MAINTENANCE_RESPONSE)
+        with pytest.raises(UpdateFailed):
+            authed_api.get_pool()
+
+    def test_maintenance_detection_does_not_raise_http_error(self, authed_api, requests_mock):
+        """Maintenance responses have HTTP 200 — must not be treated as an HTTP error."""
+        from homeassistant.exceptions import UpdateFailed
+        requests_mock.post(POOL_URL, json=SAMPLE_MAINTENANCE_RESPONSE, status_code=200)
+        with pytest.raises(UpdateFailed):
+            authed_api.get_pool()
+

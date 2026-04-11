@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 from KlereoHACS.sensor import KlereoSensor, KlereoParamSensor, KlereoEnumSensor
 from KlereoHACS.sensor import _PROBE_TYPE_MAP, _PARAM_SENSORS, _ENUM_SENSORS
-from tests.fixtures import SAMPLE_POOL_DATA
+from tests.fixtures import SAMPLE_POOL_DATA, SAMPLE_HYBRID_POOL_DATA
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -336,3 +336,360 @@ class TestDeviceInfo:
         coordinator.data.pop("poolNickname", None)
         sensor = make_sensor(coordinator, probe_index=2)
         assert "12345" in sensor.device_info["name"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Liquid chlorine sensors — HybrideMode handling
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestChloreConsumedNormal:
+    def test_chlore_today_normal_mode(self, coordinator):
+        # ElectroChlore_TodayTime=60, Chlore_Debit=120 → 60*120/36 = 200 mL
+        sensor = make_param_sensor(coordinator, "chlore_today_ml")
+        assert sensor.native_value == pytest.approx(200.0)
+
+    def test_chlore_total_normal_mode(self, coordinator):
+        # ElectroChlore_TotalTime=3600, Chlore_Debit=120 → 3600*120/36000 = 12.0 L
+        sensor = make_param_sensor(coordinator, "chlore_total_l")
+        assert sensor.native_value == pytest.approx(12.0)
+
+    def test_chlore_today_returns_none_when_debit_absent(self, coordinator):
+        coordinator.data["params"].pop("Chlore_Debit", None)
+        sensor = make_param_sensor(coordinator, "chlore_today_ml")
+        assert sensor.native_value is None
+
+    def test_chlore_total_returns_none_when_time_absent(self, coordinator):
+        coordinator.data["params"].pop("ElectroChlore_TotalTime", None)
+        sensor = make_param_sensor(coordinator, "chlore_total_l")
+        assert sensor.native_value is None
+
+
+@pytest.fixture
+def hybrid_coordinator():
+    coord = MagicMock()
+    coord.data = copy.deepcopy(SAMPLE_HYBRID_POOL_DATA)
+    return coord
+
+
+class TestChloreConsumedHybridMode:
+    def test_chlore_today_uses_extra_params_in_hybrid_mode(self, hybrid_coordinator):
+        # HybChl_TodayTime=120, Chlore_Debit=120 → 120*120/36 = 400 mL
+        sensor = make_param_sensor(hybrid_coordinator, "chlore_today_ml")
+        assert sensor.native_value == pytest.approx(400.0)
+
+    def test_chlore_total_uses_extra_params_in_hybrid_mode(self, hybrid_coordinator):
+        # HybChl_TotalTime=7200, Chlore_Debit=120 → 7200*120/36000 = 24.0 L
+        sensor = make_param_sensor(hybrid_coordinator, "chlore_total_l")
+        assert sensor.native_value == pytest.approx(24.0)
+
+    def test_chlore_today_returns_none_when_extra_params_absent(self, hybrid_coordinator):
+        del hybrid_coordinator.data["ExtraParams"]["HybChl_TodayTime"]
+        sensor = make_param_sensor(hybrid_coordinator, "chlore_today_ml")
+        assert sensor.native_value is None
+
+    def test_chlore_total_returns_none_when_extra_params_absent(self, hybrid_coordinator):
+        del hybrid_coordinator.data["ExtraParams"]["HybChl_TotalTime"]
+        sensor = make_param_sensor(hybrid_coordinator, "chlore_total_l")
+        assert sensor.native_value is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# state_class correctness — today vs total sensors
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestStateClass:
+    _today_keys = ["filtration_today_h", "phminus_today_ml", "elec_gram_done",
+                   "chlore_today_ml", "heating_today_h"]
+    _total_keys = ["filtration_total_h", "phminus_total_l", "chlore_total_l", "heating_total_h"]
+
+    def test_today_sensors_use_total_state_class(self, coordinator):
+        for key in self._today_keys:
+            desc = next(d for d in _PARAM_SENSORS if d.key == key)
+            assert desc.state_class == "total", (
+                f"'{key}' resets daily and must use state_class=TOTAL, not {desc.state_class!r}"
+            )
+
+    def test_cumulative_total_sensors_use_total_increasing(self, coordinator):
+        for key in self._total_keys:
+            desc = next(d for d in _PARAM_SENSORS if d.key == key)
+            assert desc.state_class == "total_increasing", (
+                f"'{key}' should use TOTAL_INCREASING, got {desc.state_class!r}"
+            )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Setpoint sentinel values (-2000 = disabled, -1000 = unknown)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSetpointSentinelGuard:
+    """Setpoints must return None for sentinel values, not expose -2000/-1000."""
+
+    @pytest.mark.parametrize("key,param", [
+        ("setpoint_water_temp", "ConsigneEau"),
+        ("setpoint_ph",         "ConsignePH"),
+        ("setpoint_redox",      "ConsigneRedox"),
+        ("setpoint_chlore",     "ConsigneChlore"),
+    ])
+    def test_returns_none_when_disabled(self, coordinator, key, param):
+        coordinator.data["params"][param] = -2000
+        sensor = make_param_sensor(coordinator, key)
+        assert sensor.native_value is None, f"{key}: -2000 should map to None"
+
+    @pytest.mark.parametrize("key,param", [
+        ("setpoint_water_temp", "ConsigneEau"),
+        ("setpoint_ph",         "ConsignePH"),
+        ("setpoint_redox",      "ConsigneRedox"),
+        ("setpoint_chlore",     "ConsigneChlore"),
+    ])
+    def test_returns_none_when_unknown(self, coordinator, key, param):
+        coordinator.data["params"][param] = -1000
+        sensor = make_param_sensor(coordinator, key)
+        assert sensor.native_value is None, f"{key}: -1000 should map to None"
+
+    @pytest.mark.parametrize("key,param,value", [
+        ("setpoint_water_temp", "ConsigneEau",   28.0),
+        ("setpoint_ph",         "ConsignePH",    7.4),
+        ("setpoint_redox",      "ConsigneRedox", 650.0),
+        ("setpoint_chlore",     "ConsigneChlore", 1.5),
+    ])
+    def test_returns_float_for_valid_value(self, coordinator, key, param, value):
+        coordinator.data["params"][param] = value
+        sensor = make_param_sensor(coordinator, key)
+        assert sensor.native_value == value
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# pH-mode and heating mode guards (sensors omitted when mode == 0)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPHModeGuard:
+    """pH- sensors must not be created when pHMode == 0."""
+    from KlereoHACS.sensor import async_setup_entry as _raw_setup
+
+    def _run_setup(self, pool_data):
+        """Helper: run async_setup_entry synchronously, return entity list."""
+        import asyncio, copy
+        from KlereoHACS.sensor import async_setup_entry
+        from unittest.mock import MagicMock
+
+        coord = MagicMock()
+        coord.data = copy.deepcopy(pool_data)
+        hass = MagicMock()
+        hass.data = {"klereo": {"entry_id": {"coordinator": coord}}}
+        config_entry = MagicMock()
+        config_entry.entry_id = "entry_id"
+
+        captured: list = []
+        # async_setup_entry calls async_add_entities without await — use a sync mock
+        def fake_async_add_entities(entities, **kwargs):
+            captured.extend(entities)
+
+        asyncio.run(async_setup_entry(hass, config_entry, fake_async_add_entities))
+        return captured
+
+    def _entity_keys(self, entities):
+        return [e.entity_description.key for e in entities
+                if getattr(e, "entity_description", None) is not None]
+
+    def test_ph_minus_sensors_absent_when_ph_mode_zero(self):
+        data = copy.deepcopy(SAMPLE_POOL_DATA)
+        data["params"]["pHMode"] = 0
+        entities = self._run_setup(data)
+        keys = self._entity_keys(entities)
+        assert "phminus_today_ml" not in keys
+        assert "phminus_total_l" not in keys
+
+    def test_ph_minus_sensors_present_when_ph_mode_nonzero(self):
+        data = copy.deepcopy(SAMPLE_POOL_DATA)
+        data["params"]["pHMode"] = 1
+        entities = self._run_setup(data)
+        keys = self._entity_keys(entities)
+        assert "phminus_today_ml" in keys
+        assert "phminus_total_l" in keys
+
+    def test_heating_sensors_absent_when_heater_mode_zero(self):
+        data = copy.deepcopy(SAMPLE_POOL_DATA)
+        data["params"]["HeaterMode"] = 0
+        entities = self._run_setup(data)
+        keys = self._entity_keys(entities)
+        assert "heating_today_h" not in keys
+        assert "heating_total_h" not in keys
+        assert "setpoint_water_temp" not in keys
+
+    def test_heating_sensors_present_when_heater_mode_nonzero(self):
+        data = copy.deepcopy(SAMPLE_POOL_DATA)
+        data["params"]["HeaterMode"] = 1
+        data["params"]["ConsigneEau"] = 28.0
+        entities = self._run_setup(data)
+        keys = self._entity_keys(entities)
+        assert "heating_today_h" in keys
+        assert "heating_total_h" in keys
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HeaterMode == 4 → aqPACType lookup
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestHeaterModeAqPACType:
+    """When HeaterMode is 4, the displayed string comes from aqPACType, not HeaterMode map."""
+
+    def test_heater_mode_4_aqpac_0_returns_klereotherm(self, coordinator):
+        coordinator.data["params"]["HeaterMode"] = 4
+        coordinator.data["params"]["aqPACType"] = 0
+        sensor = make_enum_sensor(coordinator, "heater_mode")
+        assert sensor.native_value == "KlereoTherm heat pump"
+
+    def test_heater_mode_4_aqpac_1_returns_inopac(self, coordinator):
+        coordinator.data["params"]["HeaterMode"] = 4
+        coordinator.data["params"]["aqPACType"] = 1
+        sensor = make_enum_sensor(coordinator, "heater_mode")
+        assert sensor.native_value == "InoPac heat pump"
+
+    def test_heater_mode_4_no_aqpac_returns_fallback(self, coordinator):
+        coordinator.data["params"]["HeaterMode"] = 4
+        coordinator.data["params"].pop("aqPACType", None)
+        sensor = make_enum_sensor(coordinator, "heater_mode")
+        assert sensor.native_value == "Other heat pump"
+
+    def test_heater_mode_2_returns_easytherm(self, coordinator):
+        coordinator.data["params"]["HeaterMode"] = 2
+        sensor = make_enum_sensor(coordinator, "heater_mode")
+        assert sensor.native_value == "EasyTherm"
+
+    def test_heater_mode_0_returns_none_string(self, coordinator):
+        coordinator.data["params"]["HeaterMode"] = 0
+        sensor = make_enum_sensor(coordinator, "heater_mode")
+        assert sensor.native_value == "None"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Chlorine pump runtime sensors (hours)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestChloreRuntimeSensors:
+    def test_chlore_today_h_value(self, coordinator):
+        # SAMPLE_POOL_DATA: ElectroChlore_TodayTime=60s → round(60/3600, 2) = 0.02 h
+        sensor = make_param_sensor(coordinator, "chlore_today_h")
+        assert sensor.native_value == 0.02
+
+    def test_chlore_total_h_value(self, coordinator):
+        # SAMPLE_POOL_DATA: ElectroChlore_TotalTime=3600s → 1.0 h
+        sensor = make_param_sensor(coordinator, "chlore_total_h")
+        assert sensor.native_value == 1.0
+
+    def test_chlore_today_h_state_class_total(self):
+        desc = next(d for d in _PARAM_SENSORS if d.key == "chlore_today_h")
+        assert desc.state_class == "total"
+
+    def test_chlore_total_h_state_class_total_increasing(self):
+        desc = next(d for d in _PARAM_SENSORS if d.key == "chlore_total_h")
+        assert desc.state_class == "total_increasing"
+
+    def test_chlore_today_h_returns_none_when_key_missing(self, coordinator):
+        coordinator.data["params"].pop("ElectroChlore_TodayTime", None)
+        sensor = make_param_sensor(coordinator, "chlore_today_h")
+        assert sensor.native_value is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Alert count sensor
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAlertCountSensor:
+    from KlereoHACS.sensor import KlereoAlertCountSensor as _cls
+
+    def _make(self, coordinator):
+        from KlereoHACS.sensor import KlereoAlertCountSensor
+        return KlereoAlertCountSensor(coordinator, 12345)
+
+    def test_zero_when_no_alerts(self, coordinator):
+        coordinator.data["alerts"] = []
+        assert self._make(coordinator).native_value == 0
+
+    def test_count_matches_alerts_array_length(self, coordinator):
+        coordinator.data["alerts"] = [{"code": 7, "param": 0}, {"code": 22, "param": None}]
+        assert self._make(coordinator).native_value == 2
+
+    def test_unique_id_format(self, coordinator):
+        sensor = self._make(coordinator)
+        assert sensor.unique_id == "klereo12345_alert_count"
+
+    def test_reflects_live_coordinator_data(self, coordinator):
+        coordinator.data["alerts"] = []
+        sensor = self._make(coordinator)
+        coordinator.data["alerts"] = [{"code": 1, "param": 0}]
+        assert sensor.native_value == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Alerts string sensor (KlereoEnumSensor with value_fn=_alert_string)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAlertsSensor:
+    def test_no_alerts_returns_no_alerts_string(self, coordinator):
+        coordinator.data["alerts"] = []
+        sensor = make_enum_sensor(coordinator, "alerts")
+        assert sensor.native_value == "No alerts"
+
+    def test_single_alert_with_known_code(self, coordinator):
+        coordinator.data["alerts"] = [{"code": 22, "param": None}]
+        sensor = make_enum_sensor(coordinator, "alerts")
+        assert "Circulation problem" in sensor.native_value
+
+    def test_multiple_alerts_joined_with_double_pipe(self, coordinator):
+        coordinator.data["alerts"] = [
+            {"code": 8, "param": 2},   # code 8 = Maximum threshold
+            {"code": 22, "param": None},
+        ]
+        sensor = make_enum_sensor(coordinator, "alerts")
+        val = sensor.native_value
+        assert " || " in val
+        assert "Maximum threshold" in val
+        assert "Circulation problem" in val
+
+    def test_unknown_code_shows_alert_number(self, coordinator):
+        coordinator.data["alerts"] = [{"code": 99, "param": None}]
+        sensor = make_enum_sensor(coordinator, "alerts")
+        assert "99" in sensor.native_value
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Diagnostic enum sensors (ProductIdx, PumpType, isLowSalt)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestDiagnosticEnumSensors:
+    def test_product_idx_maps_correctly(self, coordinator):
+        coordinator.data["ProductIdx"] = 1
+        sensor = make_enum_sensor(coordinator, "product_idx")
+        assert sensor.native_value == "Kompact M5"
+
+    def test_product_idx_returns_none_when_absent(self, coordinator):
+        coordinator.data.pop("ProductIdx", None)
+        sensor = make_enum_sensor(coordinator, "product_idx")
+        assert sensor.native_value is None
+
+    def test_pump_type_maps_correctly(self, coordinator):
+        coordinator.data["PumpType"] = 1
+        sensor = make_enum_sensor(coordinator, "pump_type")
+        assert sensor.native_value == "KlereoFlô (RS485)"
+
+    def test_pump_type_returns_none_when_absent(self, coordinator):
+        coordinator.data.pop("PumpType", None)
+        sensor = make_enum_sensor(coordinator, "pump_type")
+        assert sensor.native_value is None
+
+    def test_is_low_salt_maps_correctly(self, coordinator):
+        coordinator.data["isLowSalt"] = 0
+        sensor = make_enum_sensor(coordinator, "is_low_salt")
+        assert sensor.native_value == "5g/h range"
+
+    def test_is_low_salt_maps_low_range(self, coordinator):
+        coordinator.data["isLowSalt"] = 1
+        sensor = make_enum_sensor(coordinator, "is_low_salt")
+        assert sensor.native_value == "2g/h range"
+
+    def test_is_low_salt_returns_none_when_absent(self, coordinator):
+        coordinator.data.pop("isLowSalt", None)
+        sensor = make_enum_sensor(coordinator, "is_low_salt")
+        assert sensor.native_value is None
+
