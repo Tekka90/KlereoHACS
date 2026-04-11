@@ -447,7 +447,10 @@ class KlereoSensor(CoordinatorEntity, SensorEntity):
         probes = self.coordinator.data['probes']
         for probe in probes:
             if probe['index'] == self._index:
-                v = probe.get('filteredValue')
+                # filteredValue is only computed for regulation probes; fall back
+                # to directValue for informational sensors (e.g. air temperature).
+                v = probe.get('filteredValue') if probe.get('filteredValue') is not None \
+                    else probe.get('directValue')
                 if v is None:
                     return None
                 LOGGER.debug(f"{self._probe_name}={v}")
@@ -463,9 +466,12 @@ class KlereoSensor(CoordinatorEntity, SensorEntity):
         probes = self.coordinator.data['probes']
         for probe in probes:
             if probe['index'] == self._index:
+                using_direct = (probe.get('filteredValue') is None
+                                and probe.get('directValue') is not None)
                 return {
-                    'Time': probe['filteredTime'],
                     'Type': self._probe_type,
+                    'Time': probe.get('directTime' if using_direct else 'filteredTime'),
+                    'Source': 'direct' if using_direct else 'filtered',
                 }
         return None
 

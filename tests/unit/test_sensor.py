@@ -64,9 +64,16 @@ class TestKlereoSensorNativeValue:
         sensor = KlereoSensor(coordinator, probe, 12345)
         assert sensor.native_value is None
 
-    def test_returns_none_when_filtered_value_is_null(self, coordinator):
-        """API can return null for a sensor that isn't measuring yet — must not crash."""
+    def test_falls_back_to_direct_value_when_filtered_is_null(self, coordinator):
+        """filteredValue null → use directValue (e.g. air temperature probe)."""
         coordinator.data["probes"][0]["filteredValue"] = None
+        coordinator.data["probes"][0]["directValue"] = 22.1
+        sensor = make_sensor(coordinator, probe_index=2)
+        assert sensor.native_value == pytest.approx(22.1)
+
+    def test_returns_none_when_both_values_are_null(self, coordinator):
+        coordinator.data["probes"][0]["filteredValue"] = None
+        coordinator.data["probes"][0]["directValue"] = None
         sensor = make_sensor(coordinator, probe_index=2)
         assert sensor.native_value is None
 
@@ -104,6 +111,19 @@ class TestKlereoSensorAttributes:
         attrs = sensor.extra_state_attributes
         assert "Time" in attrs
         assert attrs["Time"] == 45
+
+    def test_extra_attributes_source_filtered_when_filtered_value_present(self, coordinator):
+        sensor = make_sensor(coordinator, probe_index=2)
+        assert sensor.extra_state_attributes["Source"] == "filtered"
+
+    def test_extra_attributes_source_direct_when_filtered_is_null(self, coordinator):
+        coordinator.data["probes"][0]["filteredValue"] = None
+        coordinator.data["probes"][0]["directValue"] = 22.1
+        coordinator.data["probes"][0]["directTime"] = 10
+        sensor = make_sensor(coordinator, probe_index=2)
+        attrs = sensor.extra_state_attributes
+        assert attrs["Source"] == "direct"
+        assert attrs["Time"] == 10
 
     def test_extra_attributes_returns_none_for_missing_probe(self, coordinator):
         probe = {"index": 99, "type": 5, "filteredValue": 0,
