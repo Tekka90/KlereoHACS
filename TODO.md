@@ -41,7 +41,7 @@
 
 ## 🟠 Medium Priority — Reliability & Robustness
 
-- [ ] **[B3] Proactive JWT refresh before 60-minute expiry**
+- [x] **[B3] Proactive JWT refresh before 60-minute expiry**
   - Currently the JWT is re-acquired only when `self.jwt` is `None` (i.e., on first call after
     startup). If HA runs for more than 60 minutes the token expires silently.
   - Jeedom stores `login_dt` and re-authenticates when within 55 minutes of issue time.
@@ -106,7 +106,92 @@
 
 ---
 
-## 🔵 New Features (inspired by Jeedom plugin)
+## 🟢 HACS Publishing Readiness
+
+Items required before submitting to the HACS default repository.  
+Reference: **https://www.hacs.xyz/docs/publish/**
+
+### Repository & metadata
+
+- [ ] **Fix invalid JSON in `manifest.json`**
+  - Trailing comma after `"iot_class": "cloud_polling"` makes the file invalid JSON.
+  - Remove it — HA and HACS both reject non-standard JSON.
+
+- [ ] **Add `issue_tracker` field to `manifest.json`**
+  - Required by HACS: `"issue_tracker": "https://github.com/Tekka90/KlereoHACS/issues"`
+
+- [ ] **Add `hacs` minimum-version field to `manifest.json`**
+  - Required by HACS: `"hacs": "2.0.0"` (or the minimum version that introduced the APIs used)
+
+- [ ] **Create `hacs.json` at the repository root**
+  - Minimum content:
+    ```json
+    {
+      "name": "Klereo",
+      "render_readme": true
+    }
+    ```
+  - `render_readme: true` causes HACS to display `README.md` as the integration description.
+
+- [ ] **Ensure `codeowners` in `manifest.json` matches the GitHub account**
+  - Currently `"@ldousset-klr"` (upstream author). Change to `"@Tekka90"` since this is the
+    actively maintained fork that will be submitted.
+
+- [ ] **Ensure `README.md` is at the repository root**
+  - Currently at `custom_components/klereo/README.md` — HACS expects it at the **repo root**.
+  - Either move it or add a root-level `README.md` that documents installation, configuration,
+    and known limitations. The current content is already excellent — just relocate it.
+
+### CI / validation workflows
+
+- [ ] **Add HACS Action workflow (`.github/workflows/validate.yml`)**
+  - Runs `hacs/action@main` on every push / PR to catch HACS compliance regressions early.
+  - Minimum content:
+    ```yaml
+    name: HACS Validation
+    on: [push, pull_request]
+    jobs:
+      validate:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - uses: hacs/action@main
+            with:
+              category: integration
+    ```
+
+- [ ] **Add `hassfest` validation workflow (`.github/workflows/hassfest.yml`)**
+  - Validates `manifest.json`, translations, and integration structure against HA's own rules.
+  - Minimum content:
+    ```yaml
+    name: Validate with hassfest
+    on: [push, pull_request]
+    jobs:
+      validate:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - uses: home-assistant/actions/hassfest@master
+    ```
+
+- [ ] **Add unit test CI workflow (`.github/workflows/tests.yml`)**
+  - Runs `pytest tests/unit/` on every push / PR to prevent regressions reaching main.
+
+### Release management
+
+- [ ] **Create a GitHub Release tagged `v1.0.0`**
+  - The release tag must match `manifest.json`'s `"version"` field exactly.
+  - HACS requires at least one published release to install from.
+  - Include a changelog in the release body describing what the integration exposes.
+
+### Repository visibility
+
+- [ ] **Confirm the repository `Tekka90/KlereoHACS` is public**
+  - HACS cannot index or install from private repositories.
+
+---
+
+
 
 These features exist in `jeedom-klereo` but are not yet implemented in KlereoHACS:
 

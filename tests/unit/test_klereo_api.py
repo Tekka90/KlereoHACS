@@ -4,6 +4,7 @@ All HTTP calls are intercepted by the ``requests-mock`` pytest fixture.
 No real network traffic is produced.
 """
 import hashlib
+from datetime import datetime, timedelta
 
 import pytest
 import requests
@@ -293,4 +294,97 @@ class TestMaintenanceDetection:
         requests_mock.post(POOL_URL, json=SAMPLE_MAINTENANCE_RESPONSE, status_code=200)
         with pytest.raises(UpdateFailed):
             authed_api.get_pool()
+
+
+# ── B3: Proactive JWT refresh (≥55 minutes) ───────────────────────────────────
+
+class TestJwtProactiveRefresh:
+    """B3 — The JWT must be refreshed proactively when ≥55 minutes old,
+    before the next API request, not only on server-side rejection.
+    """
+
+    def _api_with_old_jwt(self, age_minutes: int) -> KlereoAPI:
+        """Return an api instance whose JWT was acquired `age_minutes` ago."""
+        api = KlereoAPI("user@example.com", "s3cr3t", 12345)
+        api.jwt = "old-jwt-token"
+        api.jwt_acquired_at = datetime.now() - timedelta(minutes=age_minutes)
+        return api
+
+    def test_no_refresh_when_token_is_fresh(self, requests_mock):
+        """A token that is only 10 minutes old must NOT trigger a proactive refresh."""
+        api = self._api_with_old_jwt(10)
+        jwt_mock = requests_mock.post(JWT_URL, json=SAMPLE_JWT_RESPONSE)
+        requests_mock.post(POOL_URL, json=SAMPLE_GET_POOL_RESPONSE)
+        api.get_pool()
+        assert jwt_mock.call_count == 0, "Fresh token must not be re-acquired"
+
+    def test_no_refresh_when_token_is_54_minutes_old(self, requests_mock):
+        """A token that is 54 minutes old is still within the 55-minute window."""
+        api = self._api_with_old_jwt(54)
+        jwt_mock = requests_mock.post(JWT_URL, json=SAMPLE_JWT_RESPONSE)
+        requests_mock.post(POOL_URL, json=SAMPLE_GET_POOL_RESPONSE)
+        api.get_pool()
+        assert jwt_mock.call_count == 0
+
+    def test_refresh_when_token_is_exactly_55_minutes_old(self, requests_mock):
+        """A token that is exactly 55 minutes old must be refreshed proactively."""
+        api = self._api_with_old_jwt(55)
+        jwt_mock = requests_mock.post(JWT_URL, json=SAMPLE_JWT_RESPONSE)
+        requests_mock.post(POOL_URL, json=SAMPLE_GET_POOL_RESPONSE)
+        api.get_pool()
+        assert jwt_mock.call_count == 1, "Token ≥55 min must trigger proactive refresh"
+
+    def test_refresh_when_token_is_60_minutes_old(self, requests_mock):
+        """A token that is 60 minutes old (expired) must be proactively refreshed."""
+        api = self._api_with_old_jwt(60)
+        jwt_mock = requests_mock.post(JWT_URL, json=SAMPLE_JWT_RESPONSE)
+        requests_mock.post(POOL_URL, json=SAMPLE_GET_POOL_RESPONSE)
+        api.get_pool()
+        assert jwt_mock.call_count == 1
+
+    def test_new_jwt_is_stored_and_used_after_proactive_refresh(self, requests_mock):
+        """After proactive refresh the new JWT must be used for the actual request."""
+        api = self._api_with_old_jwt(56)
+        requests_mock.post(JWT_URL, json=SAMPLE_JWT_RESPONSE)
+        pool_mock = requests_mock.post(POOL_URL, json=SAMPLE_GET_POOL_RESPONSE)
+        api.get_pool()
+        # The pool request must carry the NEW token, not the old one
+        assert pool_mock.last_request.headers["Authorization"] == (
+            f"Bearer {SAMPLE_JWT_RESPONSE['jwt']}"
+        )
+
+    def test_jwt_acquired_at_is_updated_after_proactive_refresh(self, requests_mock):
+        """After proactive refresh, jwt_acquired_at must be reset to ~now."""
+        api = self._api_with_old_jwt(56)
+        requests_mock.post(JWT_URL, json=SAMPLE_JWT_RESPONSE)
+        requests_mock.post(POOL_URL, json=SAMPLE_GET_POOL_RESPONSE)
+        before = datetime.now()
+        api.get_pool()
+        after = datetime.now()
+        assert api.jwt_acquired_at is not None
+        assert before <= api.jwt_acquired_at <= after, (
+            "jwt_acquired_at must be updated to the current time after refresh"
+        )
+
+    def test_proactive_refresh_does_not_double_refresh_on_fresh_server_response(
+        self, requests_mock
+    ):
+        """When proactive refresh fires, the subsequent successful pool response
+        must NOT trigger a second (reactive) re-auth, resulting in exactly 1 JWT call.
+        """
+        api = self._api_with_old_jwt(56)
+        jwt_mock = requests_mock.post(JWT_URL, json=SAMPLE_JWT_RESPONSE)
+        requests_mock.post(POOL_URL, json=SAMPLE_GET_POOL_RESPONSE)
+        api.get_pool()
+        assert jwt_mock.call_count == 1
+
+    def test_get_jwt_sets_jwt_acquired_at(self, requests_mock):
+        """Calling get_jwt() directly must record jwt_acquired_at."""
+        api = KlereoAPI("user@example.com", "s3cr3t", 12345)
+        requests_mock.post(JWT_URL, json=SAMPLE_JWT_RESPONSE)
+        before = datetime.now()
+        api.get_jwt()
+        after = datetime.now()
+        assert api.jwt_acquired_at is not None
+        assert before <= api.jwt_acquired_at <= after
 

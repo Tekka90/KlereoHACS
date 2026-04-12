@@ -558,6 +558,44 @@ def test_unique_id(coordinator, ...):
     entity = MyEntity(coordinator, ...)
     assert entity.unique_id == f"id_klereo{poolid}_expected_suffix"
 
+---
+
+## HACS Publishing
+
+This integration is planned for distribution through **HACS** (Home Assistant Community Store).  
+Official publishing documentation: **https://www.hacs.xyz/docs/publish/**
+
+### Key requirements to keep in mind
+
+- The integration must live under `custom_components/klereo/` (already done).
+- `manifest.json` must declare `"domain"`, `"name"`, `"version"`, `"documentation"`,
+  `"issue_tracker"`, `"codeowners"`, and `"hacs"` (minimum HACS version).
+- A `hacs.json` file must exist at the repository root with at minimum:
+  ```json
+  {
+    "name": "Klereo",
+    "render_readme": true
+  }
+  ```
+- The repository must be **public** on GitHub (owner: `Tekka90`, repo: `KlereoHACS`).
+- A `README.md` describing the integration, installation steps, and configuration options
+  must exist at the repository root.
+- Releases must follow **semver** (`1.0.0`, `1.1.0`, …) and be created as GitHub Releases
+  with the version tag matching `manifest.json`'s `"version"` field.
+- Before submitting to the HACS default repository, the integration must pass the
+  [HACS Action](https://github.com/hacs/action) CI check — add it to `.github/workflows/`.
+
+### Checklist before first HACS submission
+
+- [ ] `hacs.json` present at repository root
+- [ ] `manifest.json` has all required fields including `"iot_class"` and correct `"version"`
+- [ ] `README.md` covers installation, configuration, and known limitations
+- [ ] At least one GitHub Release with a semver tag
+- [ ] HACS Action CI workflow passing
+- [ ] Integration passes HA's `hassfest` validation (also available as a GitHub Action)
+
+````
+
 def test_extra_state_attributes_keys(coordinator, ...):
     attrs = entity.extra_state_attributes
     for key in ("ExpectedKey1", "ExpectedKey2"):

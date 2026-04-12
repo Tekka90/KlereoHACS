@@ -1,5 +1,6 @@
 import logging
 import hashlib
+from datetime import datetime, timedelta
 from .const import KLEREOSERVER, HA_VERSION
 
 # 'requests' is imported inside each method to avoid blocking the HA event loop
@@ -10,6 +11,9 @@ LOGGER = logging.getLogger(__name__)
 # JSON error details that indicate the JWT has expired / is invalid
 _JWT_EXPIRED_DETAILS = {"jwt expired", "invalid jwt", "jwt invalid", "unauthorized", "not authenticated"}
 
+# Re-authenticate when the token is this old — Jeedom uses 55 min (token valid 60 min)
+_JWT_REFRESH_AFTER = timedelta(minutes=55)
+
 
 class KlereoAPI:
     def __init__(self, username, password, poolid):
@@ -18,6 +22,7 @@ class KlereoAPI:
         self.poolid = poolid
         self.base_url = KLEREOSERVER
         self.jwt = None
+        self.jwt_acquired_at: datetime | None = None
 
     def hash_password(self):
         return hashlib.sha1(self.password.encode()).hexdigest()
@@ -35,6 +40,7 @@ class KlereoAPI:
         response = requests.post(url, data=payload)
         response.raise_for_status()
         self.jwt = response.json().get('jwt')
+        self.jwt_acquired_at = datetime.now()
         LOGGER.debug("JWT refreshed successfully")
         return self.jwt
 
@@ -46,14 +52,28 @@ class KlereoAPI:
         return any(kw in detail for kw in _JWT_EXPIRED_DETAILS)
 
     def _post(self, url: str, payload: dict | None = None) -> dict:
-        """POST helper that automatically re-authenticates once on JWT expiry."""
+        """POST helper that automatically re-authenticates once on JWT expiry.
+
+        Two refresh strategies are combined:
+        1. **Proactive**: if the stored JWT is ≥ 55 minutes old, re-authenticate
+           before sending the request (mirrors Jeedom's login_dt logic).
+        2. **Reactive**: if the server returns a JWT-expiry error on any request,
+           re-authenticate once and retry.
+        """
         import requests  # deferred — first import happens in executor thread
-        if not self.jwt:
+        # --- Proactive refresh (B3) ---
+        if self.jwt is None or (
+            self.jwt_acquired_at is not None
+            and datetime.now() - self.jwt_acquired_at >= _JWT_REFRESH_AFTER
+        ):
+            if self.jwt_acquired_at is not None and self.jwt is not None:
+                LOGGER.info("JWT is ≥55 min old — proactively refreshing before request")
             self.get_jwt()
         headers = {'Authorization': f'Bearer {self.jwt}'}
         response = requests.post(url, headers=headers, data=payload or {})
         response.raise_for_status()
         body = response.json()
+        # --- Reactive refresh ---
         if self._is_auth_error(body):
             LOGGER.info("JWT expired — re-authenticating and retrying request")
             self.get_jwt()
