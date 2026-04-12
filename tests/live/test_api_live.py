@@ -40,7 +40,7 @@ VALID_PUMP_TYPES = {0, 1, 2, 7}
 class TestAuthentication:
     def test_get_jwt_returns_non_empty_string(self, live_credentials):
         """GetJWT.php must return a usable JWT string."""
-        from KlereoHACS.klereo_api import KlereoAPI
+        from klereo.klereo_api import KlereoAPI
 
         api = KlereoAPI(
             live_credentials["username"],
@@ -60,7 +60,7 @@ class TestAuthentication:
         """Sanity-check: we must be using 'jwt', not the deprecated 'token' field."""
         import requests
         import hashlib
-        from KlereoHACS.const import KLEREOSERVER, HA_VERSION
+        from klereo.const import KLEREOSERVER, HA_VERSION
 
         hashed = hashlib.sha1(live_credentials["password"].encode()).hexdigest()
         resp = requests.post(
@@ -341,7 +341,7 @@ class TestGetPoolDetails:
     def test_consigne_eau_sentinel_maps_to_none_in_entity(self, pool_data):
         """When ConsigneEau is -2000 or -1000, the sensor entity must return None."""
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+        from klereo.sensor import _PARAM_SENSORS, KlereoParamSensor
 
         params = pool_data.get("params", {})
         val = params.get("ConsigneEau")
@@ -359,7 +359,7 @@ class TestGetPoolDetails:
     def test_valid_consigne_eau_returns_float(self, pool_data):
         """When ConsigneEau is a real setpoint, the sensor entity must return a float."""
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+        from klereo.sensor import _PARAM_SENSORS, KlereoParamSensor
 
         params = pool_data.get("params", {})
         val = params.get("ConsigneEau")
@@ -408,7 +408,7 @@ class TestGetPoolDetails:
     def test_alert_count_sensor_matches_alerts_list_length(self, pool_data):
         """KlereoAlertCountSensor.native_value must equal len(pool_data['alerts'])."""
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import KlereoAlertCountSensor
+        from klereo.sensor import KlereoAlertCountSensor
 
         coord = MagicMock()
         coord.data = pool_data
@@ -416,14 +416,13 @@ class TestGetPoolDetails:
         assert sensor.native_value == len(pool_data.get("alerts", []))
 
     def test_alerts_string_sensor_is_non_empty_string(self, pool_data):
-        """The 'alerts' enum sensor must always return a non-empty string."""
+        """The alerts string sensor must always return a non-empty string."""
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+        from klereo.sensor import KlereoAlertStringSensor
 
         coord = MagicMock()
         coord.data = pool_data
-        desc = next(d for d in _ENUM_SENSORS if d.key == "alerts")
-        sensor = KlereoEnumSensor(coord, pool_data["idSystem"], desc)
+        sensor = KlereoAlertStringSensor(coord, pool_data["idSystem"])
         val = sensor.native_value
         assert isinstance(val, str) and len(val) > 0
 
@@ -440,7 +439,7 @@ class TestGetPoolDetails:
         if "ProductIdx" not in pool_data:
             pytest.skip("ProductIdx not in live data")
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+        from klereo.sensor import _ENUM_SENSORS, KlereoEnumSensor
 
         coord = MagicMock()
         coord.data = pool_data
@@ -461,7 +460,7 @@ class TestGetPoolDetails:
         if "PumpType" not in pool_data:
             pytest.skip("PumpType not in live data")
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+        from klereo.sensor import _ENUM_SENSORS, KlereoEnumSensor
 
         coord = MagicMock()
         coord.data = pool_data
@@ -497,7 +496,7 @@ class TestGetPoolDetails:
         if "ElectroChlore_TodayTime" not in params:
             pytest.skip("ElectroChlore_TodayTime not in live data")
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+        from klereo.sensor import _PARAM_SENSORS, KlereoParamSensor
 
         coord = MagicMock()
         coord.data = pool_data
@@ -524,7 +523,7 @@ class TestGetPoolDetails:
         if params.get("HeaterMode") != 4:
             pytest.skip("HeaterMode != 4 on this pool")
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+        from klereo.sensor import _ENUM_SENSORS, KlereoEnumSensor
 
         coord = MagicMock()
         coord.data = pool_data
@@ -547,7 +546,7 @@ class TestParamSensorsWithLiveData:
 
     def test_filtration_today_sensor_produces_hours(self, pool_data):
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+        from klereo.sensor import _PARAM_SENSORS, KlereoParamSensor
 
         params = pool_data.get("params", {})
         if "Filtration_TodayTime" not in params:
@@ -564,7 +563,7 @@ class TestParamSensorsWithLiveData:
     def test_setpoint_water_temp_not_sentinel(self, pool_data):
         """If ConsigneEau is a real value, the sensor must not return -2000 or -1000."""
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+        from klereo.sensor import _PARAM_SENSORS, KlereoParamSensor
 
         params = pool_data.get("params", {})
         if "ConsigneEau" not in params:
@@ -582,7 +581,7 @@ class TestParamSensorsWithLiveData:
 
     def test_setpoint_ph_not_sentinel(self, pool_data):
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+        from klereo.sensor import _PARAM_SENSORS, KlereoParamSensor
 
         params = pool_data.get("params", {})
         if "ConsignePH" not in params:
@@ -598,7 +597,7 @@ class TestParamSensorsWithLiveData:
 
     def test_setpoint_redox_not_sentinel(self, pool_data):
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _PARAM_SENSORS, KlereoParamSensor
+        from klereo.sensor import _PARAM_SENSORS, KlereoParamSensor
 
         params = pool_data.get("params", {})
         if "ConsigneRedox" not in params:
@@ -614,7 +613,7 @@ class TestParamSensorsWithLiveData:
 
     def test_pool_mode_enum_sensor_produces_known_string(self, pool_data):
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+        from klereo.sensor import _ENUM_SENSORS, KlereoEnumSensor
 
         params = pool_data.get("params", {})
         if "PoolMode" not in params:
@@ -632,7 +631,7 @@ class TestParamSensorsWithLiveData:
 
     def test_heater_mode_enum_sensor_produces_known_string(self, pool_data):
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import _ENUM_SENSORS, KlereoEnumSensor
+        from klereo.sensor import _ENUM_SENSORS, KlereoEnumSensor
 
         params = pool_data.get("params", {})
         if "HeaterMode" not in params:
@@ -650,7 +649,7 @@ class TestParamSensorsWithLiveData:
 
     def test_alert_count_sensor_is_non_negative_int(self, pool_data):
         from unittest.mock import MagicMock
-        from KlereoHACS.sensor import KlereoAlertCountSensor
+        from klereo.sensor import KlereoAlertCountSensor
 
         coord = MagicMock()
         coord.data = pool_data

@@ -71,7 +71,7 @@ def live_api(live_credentials):
     Authenticates once per test session.  READ-ONLY — no write methods are
     called from this fixture or from the live tests themselves.
     """
-    from KlereoHACS.klereo_api import KlereoAPI
+    from klereo.klereo_api import KlereoAPI
 
     api = KlereoAPI(
         live_credentials["username"],

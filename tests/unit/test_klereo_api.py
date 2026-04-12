@@ -8,7 +8,7 @@ import hashlib
 import pytest
 import requests
 
-from KlereoHACS.klereo_api import KlereoAPI
+from klereo.klereo_api import KlereoAPI
 from tests.fixtures import (
     SAMPLE_GET_POOL_RESPONSE,
     SAMPLE_INDEX_RESPONSE,
@@ -198,6 +198,52 @@ class TestTurnOffDevice:
         authed_api.turn_off_device(0)
         body = m.last_request.body or ""
         assert "poolID=12345" in body
+
+
+# ── JWT auto-refresh on expiry ────────────────────────────────────────────────────────
+
+SAMPLE_JWT_EXPIRED_RESPONSE = {"status": "error", "detail": "jwt expired"}
+SAMPLE_JWT_INVALID_RESPONSE = {"status": "error", "detail": "invalid jwt"}
+
+
+class TestJwtAutoRefresh:
+    """When a request returns a JWT-expiry error the API must re-auth and retry."""
+
+    def test_get_pool_retries_after_jwt_expired(self, authed_api, requests_mock):
+        """First call returns jwt-expired; second (after re-auth) returns valid data."""
+        requests_mock.post(JWT_URL, json=SAMPLE_JWT_RESPONSE)
+        pool_mock = requests_mock.post(POOL_URL, [
+            {"json": SAMPLE_JWT_EXPIRED_RESPONSE},
+            {"json": SAMPLE_GET_POOL_RESPONSE},
+        ])
+        result = authed_api.get_pool()
+        assert result["idSystem"] == 12345
+        assert pool_mock.call_count == 2
+
+    def test_get_pool_re_authenticates_on_expiry(self, authed_api, requests_mock):
+        jwt_mock = requests_mock.post(JWT_URL, json=SAMPLE_JWT_RESPONSE)
+        requests_mock.post(POOL_URL, [
+            {"json": SAMPLE_JWT_EXPIRED_RESPONSE},
+            {"json": SAMPLE_GET_POOL_RESPONSE},
+        ])
+        authed_api.get_pool()
+        assert jwt_mock.call_count == 1
+
+    def test_turn_on_retries_after_jwt_expired(self, authed_api, requests_mock):
+        requests_mock.post(JWT_URL, json=SAMPLE_JWT_RESPONSE)
+        set_mock = requests_mock.post(SET_OUT_URL, [
+            {"json": SAMPLE_JWT_EXPIRED_RESPONSE},
+            {"json": SAMPLE_SET_OUT_RESPONSE},
+        ])
+        authed_api.turn_on_device(1)
+        assert set_mock.call_count == 2
+
+    def test_raises_update_failed_on_non_auth_api_error(self, authed_api, requests_mock):
+        """Non-auth API errors must raise UpdateFailed, not silently swallow."""
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+        requests_mock.post(POOL_URL, json={"status": "error", "detail": "unknown_pool"})
+        with pytest.raises(UpdateFailed):
+            authed_api.get_pool()
 
 
 # ── SetOut payload correctness (newMode=0 Manual, comMode=1) ──────────────────

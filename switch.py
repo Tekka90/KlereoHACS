@@ -7,6 +7,26 @@ from .const import DOMAIN
 import logging
 LOGGER = logging.getLogger(__name__)
 
+# Human-readable labels — derived from the Jeedom klereo reference implementation
+_OUT_MODE_LABELS = {
+    0: "manual",
+    1: "time_slots",
+    2: "timer",
+    3: "regulation",
+    4: "clone",
+    5: "special",
+    6: "test",
+    7: "bad",
+    8: "pulse",
+    9: "auto",
+}
+
+_OUT_STATUS_LABELS = {
+    0: "off",
+    1: "on",
+    2: "auto",
+}
+
 async def async_setup_entry(hass, config_entry, async_add_entities):
     
     LOGGER.info(f"Setting up switches...")
@@ -37,8 +57,6 @@ class KlereoOut(CoordinatorEntity, SwitchEntity):
         self._index = out['index']
         self._type = out['type']
         self._mode = out['mode']
-        self._state = out['status']
-        self._realstate = out['realStatus']
         self._poolid = poolid
 
     @property
@@ -59,13 +77,10 @@ class KlereoOut(CoordinatorEntity, SwitchEntity):
         outs = self.coordinator.data['outs']
         for out in outs:
             if out['index'] == self._index:
-                LOGGER.debug(f"{self._name} status={out['status']} realStatus={out['realStatus']} state={self._state}")
-                if self._state == "on":
-                    return True
-                if self._state == "off":
-                    return False
-                # No optimistic override — use the actual relay state
-                return out['realStatus'] == 1
+                LOGGER.debug(f"{self._name} status={out['status']} realStatus={out['realStatus']}")
+                # status: 0=OFF, 1=ON (manual), 2=AUTO (running on schedule/timer)
+                # Any non-zero status means the output is physically active.
+                return out['status'] != 0
         return None
 
     @property
@@ -82,29 +97,28 @@ class KlereoOut(CoordinatorEntity, SwitchEntity):
         outs = self.coordinator.data['outs']
         for out in outs:
             if out['index'] == self._index:
+                mode = out['mode']
+                status = out['status']
+                mode_label = _OUT_MODE_LABELS.get(mode, f"unknown({mode})")
+                status_label = _OUT_STATUS_LABELS.get(status, f"unknown({status})")
                 return {
                     'Time': out['updateTime'],
                     'Type': out['type'],
-                    'Mode': out['mode'],
+                    'Mode': mode,
+                    'control_mode': mode_label,
+                    'Status': status,
+                    'status_reason': status_label,
                     'RealStatus': out['realStatus'],
                 }
         return None
 
     async def async_turn_on(self, **kwargs):
         await self.hass.async_add_executor_job(self._api.turn_on_device, self._index)
-        LOGGER.debug(f"update HA state {self._state} (before)")
-        LOGGER.debug(f"Todo: update coordinator data !")
-        self._state = "on"
-        self.async_write_ha_state()
-        LOGGER.debug(f"HA state={self._state}")
+        await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs):
         await self.hass.async_add_executor_job(self._api.turn_off_device, self._index)
-        LOGGER.debug(f"update HA state {self._state} (before)")
-        LOGGER.debug(f"Todo: update coordinator data !")
-        self._state = "off"
-        self.async_write_ha_state()
-        LOGGER.debug(f"HA state={self._state}")
+        await self.coordinator.async_request_refresh()
 
     async def async_set_mode(self, mode):
         #if mode not in ["manual", "timer", "schedule"]:

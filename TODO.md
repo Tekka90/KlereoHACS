@@ -221,3 +221,17 @@ These features exist in `jeedom-klereo` but are not yet implemented in KlereoHAC
 - [x] Output switches exposed as HA entities with on/off control via `SetOut.php`
 - [x] UI config flow (username, password, poolID)
 - [x] HACS-compatible structure with `manifest.json`
+- [x] **Fix `is_on` reads `status` not `realStatus`**
+  - Outputs running on a schedule report `status=2` (AUTO). The previous check
+    `realStatus == 1` missed this case — a running pump on a timer appeared as off.
+  - Fixed: `is_on` now returns `out['status'] != 0` (any non-zero status = physically active).
+- [x] **Add `control_mode` and `status_reason` extra attributes to switches**
+  - `control_mode` — human-readable operating mode (`manual`, `time_slots`, `timer`,
+    `regulation`, `auto`, …) derived from `out['mode']`.
+  - `status_reason` — human-readable current state (`off`, `on`, `auto`) derived from
+    `out['status']`.
+  - Useful in Lovelace cards, automations, and template sensors to know *why* an output is on.
+- [x] **Fix `DeviceInfo` stub not supporting subscript access**
+  - The HA `DeviceInfo` object supports `obj["key"]` access (TypedDict-style).
+  - The test stub was a plain `@dataclass` — added `__getitem__` / `__setitem__` so tests
+    using `sensor.device_info["identifiers"]` etc. work correctly.

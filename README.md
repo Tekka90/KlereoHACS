@@ -120,6 +120,43 @@ One switch per output returned by `GetPoolDetails`. Outputs are named `klereo<po
 | 9–14 | Auxiliary 4–9 |
 | 15 | Hybrid disinfectant |
 
+The `is_on` state reflects `out['status'] != 0`, meaning the switch reports **on** for both
+manually-forced (`status=1`) and schedule/timer-driven (`status=2`) outputs. An output
+running on a time-slot schedule will correctly show as on even though no manual command
+was issued.
+
+Each switch also exposes the following extra state attributes:
+
+| Attribute | Type | Example | Description |
+|---|---|---|---|
+| `Mode` | int | `1` | Raw mode code from the API |
+| `control_mode` | string | `time_slots` | Human-readable operating mode (see table below) |
+| `Status` | int | `2` | Raw status code from the API |
+| `status_reason` | string | `auto` | Human-readable status (`off` / `on` / `auto`) |
+| `RealStatus` | int | `1` | Physical relay state reported by the controller |
+| `Type` | int | `1` | Output type code |
+| `Time` | int | `1712000000` | Epoch timestamp of last change |
+
+**`control_mode` values:**
+
+| Value | Meaning |
+|---|---|
+| `manual` | Output forced on/off by the user |
+| `time_slots` | Running according to a programmed schedule |
+| `timer` | Running for a fixed duration |
+| `regulation` | Controlled by a regulation loop (pH, Redox…) |
+| `clone` | Mirrors another output |
+| `pulse` | Pulse mode |
+| `auto` | PLC / automate mode |
+
+**`status_reason` values:**
+
+| Value | Meaning |
+|---|---|
+| `off` | Output is off |
+| `on` | Output is manually forced on |
+| `auto` | Output is on because of a schedule, timer, or regulation |
+
 ---
 
 ## Klereo API Reference
@@ -194,10 +231,14 @@ polled by the coordinator every 5 minutes.
 | Field | Description |
 |---|---|
 | `index` | Output index (0–15, see table below) |
-| `mode` | Current operating mode (0–9) |
-| `status` | Desired state (0=off, 1=on, 2=auto) |
-| `realStatus` | Actual relay state |
+| `mode` | Current operating mode (0=manual, 1=time_slots, 2=timer, 3=regulation, 9=auto…) |
+| `status` | Current state: `0`=off, `1`=on (manual), `2`=auto (running on schedule/timer/regulation) |
+| `realStatus` | Physical relay state as reported by the controller hardware |
 | `updateTime` | Epoch timestamp of last change |
+
+> **Note:** `is_on` is derived from `status != 0`. An output running on a schedule reports
+> `status=2` (auto) — this is correctly treated as on. `realStatus` is exposed as an extra
+> attribute but is **not** used to determine the HA switch state.
 
 ### Control an output — `SetOut.php`
 
@@ -337,9 +378,9 @@ cp .env.example .env     # fill in KLEREO_USERNAME / KLEREO_PASSWORD / KLEREO_PO
 
 | Path | What it covers |
 |---|---|
-| `tests/unit/test_klereo_api.py` | All `KlereoAPI` methods — HTTP payloads, auth header, SHA-1 hashing, error handling |
-| `tests/unit/test_sensor.py` | `KlereoSensor` entity — `native_value`, `unique_id`, `entity_description`, probe type map |
-| `tests/unit/test_switch.py` | `KlereoOut` entity — `is_on`, optimistic state, `async_turn_on/off` |
+| `tests/unit/test_klereo_api.py` | All `KlereoAPI` methods — HTTP payloads, auth header, SHA-1 hashing, JWT auto-refresh, error handling |
+| `tests/unit/test_sensor.py` | `KlereoFilteredSensor`, `KlereoDirectSensor`, `KlereoParamSensor`, `KlereoEnumSensor` — `native_value`, `unique_id`, `device_info`, probe type map, `IORename` overrides, alert sensors, diagnostic sensors |
+| `tests/unit/test_switch.py` | `KlereoOut` — `is_on` (manual, auto/schedule, off), `control_mode`, `status_reason`, `device_info`, `async_turn_on/off` |
 | `tests/live/test_api_live.py` | Real API — `GetJWT`, `GetIndex`, `GetPoolDetails` structure, setpoint sanity checks |
 | `tests/fixtures.py` | Shared sample API response dicts used by unit tests |
 

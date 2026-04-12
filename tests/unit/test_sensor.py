@@ -1,4 +1,4 @@
-"""Unit tests for KlereoSensor, KlereoParamSensor, and KlereoEnumSensor entities.
+"""Unit tests for KlereoFilteredSensor, KlereoDirectSensor, KlereoParamSensor, and KlereoEnumSensor entities.
 
 All HA infrastructure is mocked via tests/conftest.py.
 Tests use a MagicMock coordinator whose .data mirrors SAMPLE_POOL_DATA.
@@ -7,8 +7,9 @@ import copy
 import pytest
 from unittest.mock import MagicMock
 
-from KlereoHACS.sensor import KlereoSensor, KlereoParamSensor, KlereoEnumSensor
-from KlereoHACS.sensor import _PROBE_TYPE_MAP, _PARAM_SENSORS, _ENUM_SENSORS
+from klereo.sensor import KlereoFilteredSensor, KlereoDirectSensor, KlereoParamSensor, KlereoEnumSensor
+from klereo.sensor import KlereoAlertStringSensor
+from klereo.sensor import _PROBE_TYPE_MAP, _PARAM_SENSORS, _ENUM_SENSORS
 from tests.fixtures import SAMPLE_POOL_DATA, SAMPLE_HYBRID_POOL_DATA
 
 
@@ -27,8 +28,14 @@ def _probe(pool_data, index):
 
 
 def make_sensor(coordinator, probe_index=2):
+    """Shorthand: returns the filtered-value sensor (regulation quality reading)."""
     probe = _probe(coordinator.data, probe_index)
-    return KlereoSensor(coordinator, probe, 12345)
+    return KlereoFilteredSensor(coordinator, probe, 12345)
+
+
+def make_direct_sensor(coordinator, probe_index=2):
+    probe = _probe(coordinator.data, probe_index)
+    return KlereoDirectSensor(coordinator, probe, 12345)
 
 
 def make_param_sensor(coordinator, key):
@@ -42,10 +49,10 @@ def make_enum_sensor(coordinator, key):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# KlereoSensor (probe-based)
+# KlereoFilteredSensor (probe filteredValue — regulation reading)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestKlereoSensorNativeValue:
+class TestKlereoFilteredSensorNativeValue:
     def test_returns_filtered_value_for_water_temp(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=2)
         assert sensor.native_value == 26.3
@@ -61,15 +68,14 @@ class TestKlereoSensorNativeValue:
     def test_returns_none_when_probe_absent_from_coordinator(self, coordinator):
         probe = {"index": 99, "type": 5, "filteredValue": 0,
                  "directValue": 0, "filteredTime": 0, "directTime": 0}
-        sensor = KlereoSensor(coordinator, probe, 12345)
+        sensor = KlereoFilteredSensor(coordinator, probe, 12345)
         assert sensor.native_value is None
 
-    def test_falls_back_to_direct_value_when_filtered_is_null(self, coordinator):
-        """filteredValue null → use directValue (e.g. air temperature probe)."""
+    def test_returns_none_when_filtered_is_null(self, coordinator):
+        """filteredValue=null (pump off) — filtered sensor must return None."""
         coordinator.data["probes"][0]["filteredValue"] = None
-        coordinator.data["probes"][0]["directValue"] = 22.1
         sensor = make_sensor(coordinator, probe_index=2)
-        assert sensor.native_value == pytest.approx(22.1)
+        assert sensor.native_value is None
 
     def test_returns_none_when_both_values_are_null(self, coordinator):
         coordinator.data["probes"][0]["filteredValue"] = None
@@ -79,13 +85,13 @@ class TestKlereoSensorNativeValue:
 
     def test_returns_none_safely_when_probes_is_null(self, coordinator):
         """API can return probes=null at boot — must not raise, must return None."""
-        sensor = make_sensor(coordinator, probe_index=2)  # create while data is valid
-        coordinator.data["probes"] = None  # then simulate null probes
+        sensor = make_sensor(coordinator, probe_index=2)
+        coordinator.data["probes"] = None
         assert sensor.native_value is None
 
     def test_returns_none_safely_when_probe_not_found(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=2)
-        coordinator.data["probes"] = []  # probe disappeared from list
+        coordinator.data["probes"] = []
         assert sensor.native_value is None
 
     def test_returns_none_for_non_numeric_value(self, coordinator):
@@ -94,69 +100,100 @@ class TestKlereoSensorNativeValue:
         assert sensor.native_value is None
 
     def test_reflects_live_coordinator_data_not_init_snapshot(self, coordinator):
-        """native_value must re-read coordinator.data on each call."""
         sensor = make_sensor(coordinator, probe_index=2)
         coordinator.data["probes"][0]["filteredValue"] = 30.0
         assert sensor.native_value == 30.0
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# KlereoDirectSensor (probe directValue — instantaneous reading)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestKlereoDirectSensorNativeValue:
+    def test_returns_direct_value_for_water_temp(self, coordinator):
+        sensor = make_direct_sensor(coordinator, probe_index=2)
+        assert sensor.native_value == 26.5
+
+    def test_returns_direct_value_for_ph(self, coordinator):
+        sensor = make_direct_sensor(coordinator, probe_index=3)
+        assert sensor.native_value == 7.25
+
+    def test_returns_none_when_direct_is_null(self, coordinator):
+        coordinator.data["probes"][0]["directValue"] = None
+        sensor = make_direct_sensor(coordinator, probe_index=2)
+        assert sensor.native_value is None
+
+    def test_returns_none_for_non_numeric_value(self, coordinator):
+        coordinator.data["probes"][0]["directValue"] = "error"
+        sensor = make_direct_sensor(coordinator, probe_index=2)
+        assert sensor.native_value is None
+
+    def test_reflects_live_coordinator_data(self, coordinator):
+        sensor = make_direct_sensor(coordinator, probe_index=2)
+        coordinator.data["probes"][0]["directValue"] = 28.0
+        assert sensor.native_value == 28.0
+
+    def test_filtered_and_direct_can_differ(self, coordinator):
+        """The two sensors must return independent values."""
+        coordinator.data["probes"][0]["filteredValue"] = 26.3
+        coordinator.data["probes"][0]["directValue"] = 26.5
+        assert make_sensor(coordinator, probe_index=2).native_value == 26.3
+        assert make_direct_sensor(coordinator, probe_index=2).native_value == 26.5
+
+
 class TestKlereoSensorIdentifiers:
-    def test_unique_id_contains_pool_and_probe_index(self, coordinator):
+    def test_unique_id_filtered_contains_suffix(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=2)
-        assert sensor.unique_id == "id_klereo12345probe2"
+        assert sensor.unique_id == "id_klereo12345probe2_filtered"
 
-    def test_name_is_human_readable_type_name(self, coordinator):
-        # probe_index=4 has type=4 (Redox) — no IORename in fixture
+    def test_unique_id_direct_contains_suffix(self, coordinator):
+        sensor = make_direct_sensor(coordinator, probe_index=2)
+        assert sensor.unique_id == "id_klereo12345probe2_direct"
+
+    def test_filtered_name_has_filtration_suffix(self, coordinator):
+        # probe_index=4 type=4 (Redox)
         sensor = make_sensor(coordinator, probe_index=4)
-        assert sensor.name == "Redox"
+        assert sensor.name == "Redox (filtration)"
 
-    def test_name_uses_probe_type_for_ph(self, coordinator):
-        # probe_index=3 has type=3 → "pH" — no IORename in fixture
-        sensor = make_sensor(coordinator, probe_index=3)
-        assert sensor.name == "pH"
-
-    def test_name_uses_probe_type_for_pressure(self, coordinator):
-        # probe_index=5 has type=6 → "Filter Pressure" — no IORename in fixture
-        sensor = make_sensor(coordinator, probe_index=5)
-        assert sensor.name == "Filter Pressure"
-
-    def test_name_iorename_already_present_in_fixture(self, coordinator):
-        # SAMPLE_POOL_DATA has IORename for probe index=2 → "Water Temp"
-        sensor = make_sensor(coordinator, probe_index=2)
-        assert sensor.name == "Water Temp"
+    def test_direct_name_has_instantaneous_suffix(self, coordinator):
+        sensor = make_direct_sensor(coordinator, probe_index=4)
+        assert sensor.name == "Redox (instantaneous)"
 
     def test_name_uses_iorename_override_when_present(self, coordinator):
         coordinator.data["IORename"] = [
             {"ioType": 2, "ioIndex": 4, "name": "My Custom Redox Sensor"}
         ]
         sensor = make_sensor(coordinator, probe_index=4)
-        assert sensor.name == "My Custom Redox Sensor"
+        assert sensor.name == "My Custom Redox Sensor (filtration)"
 
     def test_iorename_override_ignored_for_different_index(self, coordinator):
         coordinator.data["IORename"] = [
             {"ioType": 2, "ioIndex": 99, "name": "Not This One"}
         ]
         sensor = make_sensor(coordinator, probe_index=4)
-        assert sensor.name == "Redox"
+        assert sensor.name == "Redox (filtration)"
 
     def test_iorename_output_rename_not_applied_to_probe(self, coordinator):
-        # ioType=1 is output rename — must not affect probe name
         coordinator.data["IORename"] = [
             {"ioType": 1, "ioIndex": 4, "name": "Output Wrong"}
         ]
         sensor = make_sensor(coordinator, probe_index=4)
-        assert sensor.name == "Redox"
+        assert sensor.name == "Redox (filtration)"
+
+    def test_name_iorename_already_present_in_fixture(self, coordinator):
+        # SAMPLE_POOL_DATA has IORename for probe index=2 → "Water Temp"
+        sensor = make_sensor(coordinator, probe_index=2)
+        assert sensor.name == "Water Temp (filtration)"
 
     def test_name_disambiguates_duplicate_types(self, coordinator):
-        # Clear IORename so type-name fallback is exercised, then add duplicate type
         coordinator.data["IORename"] = []
         coordinator.data["probes"].append({
-            "index": 12, "type": 4,  # second Redox probe
+            "index": 12, "type": 4,
             "filteredValue": 650.0, "directValue": 650.0,
             "filteredTime": 10, "directTime": 10,
         })
         sensor = make_sensor(coordinator, probe_index=4)
-        assert sensor.name == "Redox (4)"
+        assert sensor.name == "Redox (4) (filtration)"
 
     def test_name_fallback_for_unknown_type(self, coordinator):
         coordinator.data["probes"].append({
@@ -165,59 +202,51 @@ class TestKlereoSensorIdentifiers:
             "filteredTime": 0, "directTime": 0,
         })
         probe = {"index": 99, "type": 99}
-        sensor = KlereoSensor(coordinator, probe, 12345)
-        assert sensor.name == "Probe 99"
+        sensor = KlereoFilteredSensor(coordinator, probe, 12345)
+        assert sensor.name == "Probe 99 (filtration)"
 
-    def test_unique_id_unchanged_by_naming_fix(self, coordinator):
-        # unique_id must stay stable regardless of name changes
-        sensor = make_sensor(coordinator, probe_index=2)
-        assert sensor.unique_id == "id_klereo12345probe2"
+    def test_unique_ids_are_distinct(self, coordinator):
+        f = make_sensor(coordinator, probe_index=2)
+        d = make_direct_sensor(coordinator, probe_index=2)
+        assert f.unique_id != d.unique_id
 
 
 class TestKlereoSensorAttributes:
-    def test_extra_attributes_contain_type(self, coordinator):
+    def test_filtered_sensor_extra_attributes_contain_type(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=2)
         attrs = sensor.extra_state_attributes
         assert attrs is not None
-        assert "Type" in attrs
-        assert attrs["Type"] == 5  # water temperature
+        assert attrs["Type"] == 5
 
-    def test_extra_attributes_contain_time(self, coordinator):
+    def test_filtered_sensor_extra_attributes_contain_time(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=2)
-        attrs = sensor.extra_state_attributes
-        assert "Time" in attrs
-        assert attrs["Time"] == 45
+        assert sensor.extra_state_attributes["Time"] == 45  # filteredTime
 
-    def test_extra_attributes_expose_raw_values(self, coordinator):
+    def test_filtered_sensor_exposes_direct_value_as_attribute(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=2)
-        attrs = sensor.extra_state_attributes
-        assert "filteredValue" in attrs
-        assert "directValue" in attrs
-        assert attrs["filteredValue"] == 26.3
-        assert attrs["directValue"] == 26.5
+        assert sensor.extra_state_attributes["directValue"] == 26.5
 
-    def test_extra_attributes_source_filtered_when_filtered_value_present(self, coordinator):
-        sensor = make_sensor(coordinator, probe_index=2)
-        assert sensor.extra_state_attributes["Source"] == "filtered"
+    def test_direct_sensor_extra_attributes_contain_type(self, coordinator):
+        sensor = make_direct_sensor(coordinator, probe_index=2)
+        assert sensor.extra_state_attributes["Type"] == 5
 
-    def test_extra_attributes_source_direct_when_filtered_is_null(self, coordinator):
-        coordinator.data["probes"][0]["filteredValue"] = None
-        coordinator.data["probes"][0]["directValue"] = 22.1
-        coordinator.data["probes"][0]["directTime"] = 10
-        sensor = make_sensor(coordinator, probe_index=2)
-        attrs = sensor.extra_state_attributes
-        assert attrs["Source"] == "direct"
-        assert attrs["Time"] == 10
+    def test_direct_sensor_extra_attributes_contain_time(self, coordinator):
+        sensor = make_direct_sensor(coordinator, probe_index=2)
+        assert sensor.extra_state_attributes["Time"] == 45  # directTime
+
+    def test_direct_sensor_exposes_filtered_value_as_attribute(self, coordinator):
+        sensor = make_direct_sensor(coordinator, probe_index=2)
+        assert sensor.extra_state_attributes["filteredValue"] == 26.3
 
     def test_extra_attributes_returns_none_for_missing_probe(self, coordinator):
         probe = {"index": 99, "type": 5, "filteredValue": 0,
                  "directValue": 0, "filteredTime": 0, "directTime": 0}
-        sensor = KlereoSensor(coordinator, probe, 12345)
+        sensor = KlereoFilteredSensor(coordinator, probe, 12345)
         assert sensor.extra_state_attributes is None
 
 
 class TestKlereoSensorDeviceClass:
-    """B1 fixed — device_class and unit come from entity_description (probe type map)."""
+    """device_class and unit come from entity_description (probe type map)."""
 
     def test_water_temp_probe_device_class_and_unit(self, coordinator):
         sensor = make_sensor(coordinator, probe_index=2)  # type=5
@@ -242,13 +271,17 @@ class TestKlereoSensorDeviceClass:
         assert sensor.device_class == "pressure"
         assert sensor.unit_of_measurement == "mbar"
 
+    def test_direct_sensor_shares_same_device_class(self, coordinator):
+        f = make_sensor(coordinator, probe_index=2)
+        d = make_direct_sensor(coordinator, probe_index=2)
+        assert f.device_class == d.device_class
+        assert f.unit_of_measurement == d.unit_of_measurement
+
     def test_all_probe_type_map_entries_have_valid_keys(self):
-        """Smoke test: every entry in _PROBE_TYPE_MAP must have a non-empty key."""
         for k, desc in _PROBE_TYPE_MAP.items():
             assert desc.key, f"_PROBE_TYPE_MAP[{k}] has empty key"
 
     def test_entity_description_set_on_init(self, coordinator):
-        """entity_description must be set so HA uses it authoritatively."""
         sensor = make_sensor(coordinator, probe_index=3)
         assert sensor.entity_description is not None
         assert sensor.entity_description.device_class is not None
@@ -422,6 +455,11 @@ class TestDeviceInfo:
         sensor = make_sensor(coordinator, probe_index=2)
         assert sensor.device_info["manufacturer"] == "Klereo"
 
+    def test_direct_sensor_same_device_info(self, coordinator):
+        f = make_sensor(coordinator, probe_index=2)
+        d = make_direct_sensor(coordinator, probe_index=2)
+        assert f.device_info["identifiers"] == d.device_info["identifiers"]
+
     def test_param_sensor_device_info_identifiers(self, coordinator):
         sensor = make_param_sensor(coordinator, "filtration_today_h")
         assert sensor.device_info["identifiers"] == {("klereo", 12345)}
@@ -431,7 +469,6 @@ class TestDeviceInfo:
         assert sensor.device_info["identifiers"] == {("klereo", 12345)}
 
     def test_all_entity_types_share_same_identifier(self, coordinator):
-        """All entity classes must return the same device identifier so HA groups them."""
         probe = make_sensor(coordinator, probe_index=2)
         param = make_param_sensor(coordinator, "filtration_today_h")
         enum_ = make_enum_sensor(coordinator, "pool_mode")
@@ -440,7 +477,7 @@ class TestDeviceInfo:
             frozenset(param.device_info["identifiers"]),
             frozenset(enum_.device_info["identifiers"]),
         }
-        assert len(ids) == 1, "Sensor entity classes report different device identifiers"
+        assert len(ids) == 1
 
     def test_fallback_name_when_nickname_absent(self, coordinator):
         coordinator.data.pop("poolNickname", None)
@@ -574,12 +611,12 @@ class TestSetpointSentinelGuard:
 
 class TestPHModeGuard:
     """pH- sensors must not be created when pHMode == 0."""
-    from KlereoHACS.sensor import async_setup_entry as _raw_setup
+    from klereo.sensor import async_setup_entry as _raw_setup
 
     def _run_setup(self, pool_data):
         """Helper: run async_setup_entry synchronously, return entity list."""
         import asyncio, copy
-        from KlereoHACS.sensor import async_setup_entry
+        from klereo.sensor import async_setup_entry
         from unittest.mock import MagicMock
 
         coord = MagicMock()
@@ -706,10 +743,10 @@ class TestChloreRuntimeSensors:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestAlertCountSensor:
-    from KlereoHACS.sensor import KlereoAlertCountSensor as _cls
+    from klereo.sensor import KlereoAlertCountSensor as _cls
 
     def _make(self, coordinator):
-        from KlereoHACS.sensor import KlereoAlertCountSensor
+        from klereo.sensor import KlereoAlertCountSensor
         return KlereoAlertCountSensor(coordinator, 12345)
 
     def test_zero_when_no_alerts(self, coordinator):
@@ -736,31 +773,33 @@ class TestAlertCountSensor:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestAlertsSensor:
+    def _make(self, coordinator):
+        return KlereoAlertStringSensor(coordinator, 12345)
+
     def test_no_alerts_returns_no_alerts_string(self, coordinator):
         coordinator.data["alerts"] = []
-        sensor = make_enum_sensor(coordinator, "alerts")
-        assert sensor.native_value == "No alerts"
+        assert self._make(coordinator).native_value == "No alerts"
 
     def test_single_alert_with_known_code(self, coordinator):
         coordinator.data["alerts"] = [{"code": 22, "param": None}]
-        sensor = make_enum_sensor(coordinator, "alerts")
-        assert "Circulation problem" in sensor.native_value
+        assert "Circulation problem" in self._make(coordinator).native_value
 
     def test_multiple_alerts_joined_with_double_pipe(self, coordinator):
         coordinator.data["alerts"] = [
-            {"code": 8, "param": 2},   # code 8 = Maximum threshold
+            {"code": 8, "param": 2},
             {"code": 22, "param": None},
         ]
-        sensor = make_enum_sensor(coordinator, "alerts")
-        val = sensor.native_value
+        val = self._make(coordinator).native_value
         assert " || " in val
         assert "Maximum threshold" in val
         assert "Circulation problem" in val
 
     def test_unknown_code_shows_alert_number(self, coordinator):
         coordinator.data["alerts"] = [{"code": 99, "param": None}]
-        sensor = make_enum_sensor(coordinator, "alerts")
-        assert "99" in sensor.native_value
+        assert "99" in self._make(coordinator).native_value
+
+    def test_unique_id_format(self, coordinator):
+        assert self._make(coordinator).unique_id == "klereo12345_alerts"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -393,17 +393,8 @@ _ENUM_SENSORS: list[KlereoEnumDescription] = [
         value_map=_IS_LOW_SALT_MAP,
         value_fn=lambda d: _IS_LOW_SALT_MAP.get(int(d["isLowSalt"]), f"Unknown ({d['isLowSalt']})") if d.get("isLowSalt") is not None else None,
     ),
-    # Alerts
-    KlereoEnumDescription(
-        key="alerts",
-        name="Active Alerts",
-        device_class=None,
-        options=[],
-        param_key="",
-        value_map={},
-        value_fn=_alert_string,
-    ),
 ]
+
 
 
 # ---------------------------------------------------------------------------
@@ -421,13 +412,15 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
     entities: list = []
 
-    # Probe sensors — skip probes with type=None (unconnected sensor slot)
+    # Probe sensors — one filtered + one direct entity per probe
+    # Skip probes with type=None (unconnected sensor slot)
     for probe in probes:
         if probe.get('type') is None:
             LOGGER.debug(f"Skipping null-type probe#{probe.get('index')} for #{poolid}")
             continue
-        LOGGER.info(f"Adding probe sensor for #{poolid}: {probe}")
-        entities.append(KlereoSensor(coordinator, probe, poolid))
+        LOGGER.info(f"Adding probe sensors (filtered+direct) for #{poolid}: {probe}")
+        entities.append(KlereoFilteredSensor(coordinator, probe, poolid))
+        entities.append(KlereoDirectSensor(coordinator, probe, poolid))
 
     # Numeric params sensors — only add if the value_fn returns a non-None value.
     # Guards: pH- sensors only when pHMode > 0; heating sensors only when HeaterMode > 0.
@@ -451,8 +444,9 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         except Exception:
             pass  # param not available for this pool — skip silently
 
-    # Alert count — always present
+    # Alert count and alert string — always present
     entities.append(KlereoAlertCountSensor(coordinator, poolid))
+    entities.append(KlereoAlertStringSensor(coordinator, poolid))
 
     # Enum params sensors — use value_fn when available, else fall back to param_key presence
     for desc in _ENUM_SENSORS:
@@ -467,21 +461,17 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     async_add_entities(entities, update_before_add=True)
 
 
-class KlereoSensor(CoordinatorEntity, SensorEntity):
+class _KlereoProbeBase(CoordinatorEntity, SensorEntity):
+    """Shared base for filtered and direct probe sensors."""
 
     def __init__(self, coordinator, probe, poolid):
         super().__init__(coordinator)
         self._index = probe['index']
         self._probe_type = int(probe['type'])
         self._poolid = poolid
-        # Stable opaque key used only for unique_id — must never change
         self._probe_key = f"klereo{poolid}probe{probe['index']}"
-        # Human-readable name, built once from IORename / type map
-        self._friendly_name = _probe_friendly_name(probe, coordinator.data)
-        # Assign the EntityDescription — this is what HA uses authoritatively
-        # for device_class and native_unit_of_measurement, ignoring the registry cache.
+        self._base_name = _probe_friendly_name(probe, coordinator.data)
         self.entity_description = _PROBE_TYPE_MAP.get(self._probe_type, _DEFAULT_DESCRIPTION)
-        LOGGER.debug(f"{self._probe_key} ('{self._friendly_name}') type={self._probe_type} → device_class={self.entity_description.device_class}, unit={self.entity_description.native_unit_of_measurement}")
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -492,57 +482,84 @@ class KlereoSensor(CoordinatorEntity, SensorEntity):
             manufacturer="Klereo",
         )
 
+    def _get_probe(self):
+        for probe in self.coordinator.data.get('probes') or []:
+            if probe.get('index') == self._index:
+                return probe
+        return None
+
+    def _safe_float(self, v):
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            LOGGER.warning(f"{self._probe_key}: unexpected non-numeric value {v!r}")
+            return None
+
+
+class KlereoFilteredSensor(_KlereoProbeBase):
+    """Probe value during filtration (mesure en filtration) — the regulation-quality reading."""
+
     @property
-    def name(self):
-        return self._friendly_name
+    def name(self) -> str:
+        return f"{self._base_name} (filtration)"
+
+    @property
+    def unique_id(self) -> str:
+        return f"id_{self._probe_key}_filtered"
 
     @property
     def native_value(self):
-        probes = self.coordinator.data.get('probes') or []
-        for probe in probes:
-            if probe.get('index') == self._index:
-                # filteredValue is computed only for regulation probes.
-                # Fall back to directValue for informational probes (e.g. air temp).
-                fv = probe.get('filteredValue')
-                dv = probe.get('directValue')
-                v = fv if fv is not None else dv
-                if v is None:
-                    LOGGER.debug(
-                        f"{self._probe_key}: both filteredValue and directValue are null"
-                    )
-                    return None
-                try:
-                    result = float(v)
-                    LOGGER.debug(f"{self._probe_key}={result} ({'filtered' if fv is not None else 'direct'})")
-                    return result
-                except (TypeError, ValueError):
-                    LOGGER.warning(
-                        f"{self._probe_key}: unexpected non-numeric value {v!r} (type={type(v).__name__})"
-                    )
-                    return None
-        LOGGER.debug(f"{self._probe_key}: probe index {self._index} not found in coordinator data")
-        return None
-
-    @property
-    def unique_id(self):
-        return f"id_{self._probe_key}"
+        probe = self._get_probe()
+        if probe is None:
+            return None
+        v = self._safe_float(probe.get('filteredValue'))
+        LOGGER.debug(f"{self._probe_key} filtered={v}")
+        return v
 
     @property
     def extra_state_attributes(self):
-        probes = self.coordinator.data.get('probes') or []
-        for probe in probes:
-            if probe.get('index') == self._index:
-                fv = probe.get('filteredValue')
-                dv = probe.get('directValue')
-                using_direct = (fv is None and dv is not None)
-                return {
-                    'Type': self._probe_type,
-                    'Time': probe.get('directTime' if using_direct else 'filteredTime'),
-                    'Source': 'direct' if using_direct else 'filtered',
-                    'filteredValue': fv,
-                    'directValue': dv,
-                }
-        return None
+        probe = self._get_probe()
+        if probe is None:
+            return None
+        return {
+            'Type': self._probe_type,
+            'Time': probe.get('filteredTime'),
+            'directValue': probe.get('directValue'),
+        }
+
+
+class KlereoDirectSensor(_KlereoProbeBase):
+    """Instantaneous probe value (mesure instantanée) — the live raw reading."""
+
+    @property
+    def name(self) -> str:
+        return f"{self._base_name} (instantaneous)"
+
+    @property
+    def unique_id(self) -> str:
+        return f"id_{self._probe_key}_direct"
+
+    @property
+    def native_value(self):
+        probe = self._get_probe()
+        if probe is None:
+            return None
+        v = self._safe_float(probe.get('directValue'))
+        LOGGER.debug(f"{self._probe_key} direct={v}")
+        return v
+
+    @property
+    def extra_state_attributes(self):
+        probe = self._get_probe()
+        if probe is None:
+            return None
+        return {
+            'Type': self._probe_type,
+            'Time': probe.get('directTime'),
+            'filteredValue': probe.get('filteredValue'),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -623,6 +640,39 @@ class KlereoEnumSensor(CoordinatorEntity, SensorEntity):
         if raw is None:
             return None
         return desc.value_map.get(int(raw), f"Unknown ({raw})")
+
+
+class KlereoAlertStringSensor(CoordinatorEntity, SensorEntity):
+    """Text sensor: human-readable description of active alerts."""
+
+    def __init__(self, coordinator, poolid: int):
+        super().__init__(coordinator)
+        self._poolid = poolid
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._poolid)},
+            name=self.coordinator.data.get("poolNickname", f"Pool {self._poolid}"),
+            serial_number=self.coordinator.data.get("podSerial"),
+            manufacturer="Klereo",
+        )
+
+    @property
+    def name(self) -> str:
+        return "Active Alerts"
+
+    @property
+    def unique_id(self) -> str:
+        return f"klereo{self._poolid}_alerts"
+
+    @property
+    def native_value(self) -> str | None:
+        return _alert_string(self.coordinator.data)
+
+    @property
+    def icon(self) -> str:
+        return "mdi:alert-circle-outline"
 
 
 class KlereoAlertCountSensor(CoordinatorEntity, SensorEntity):
