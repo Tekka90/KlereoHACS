@@ -5,6 +5,7 @@ No real network traffic is produced.
 """
 import hashlib
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 import requests
@@ -92,9 +93,16 @@ class TestGetJwt:
         body = m.last_request.body or ""
         assert "version=100-HA" in body
 
-    def test_raises_on_http_error(self, api, requests_mock):
+    def test_raises_config_entry_auth_failed_on_http_error(self, api, requests_mock):
+        from homeassistant.exceptions import ConfigEntryAuthFailed
         requests_mock.post(JWT_URL, status_code=500)
-        with pytest.raises(requests.HTTPError):
+        with pytest.raises(ConfigEntryAuthFailed):
+            api.get_jwt()
+
+    def test_raises_config_entry_auth_failed_on_bad_credentials(self, api, requests_mock):
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        requests_mock.post(JWT_URL, json={"status": "error", "detail": "invalid credentials"})
+        with pytest.raises(ConfigEntryAuthFailed):
             api.get_jwt()
 
 
@@ -154,9 +162,16 @@ class TestGetPool:
         api.get_pool()
         assert api.jwt == SAMPLE_JWT_RESPONSE["jwt"]
 
-    def test_raises_on_http_error(self, authed_api, requests_mock):
+    def test_raises_update_failed_on_http_error(self, authed_api, requests_mock):
+        from homeassistant.helpers.update_coordinator import UpdateFailed
         requests_mock.post(POOL_URL, status_code=503)
-        with pytest.raises(requests.HTTPError):
+        with pytest.raises(UpdateFailed):
+            authed_api.get_pool()
+
+    def test_raises_config_entry_auth_failed_on_401(self, authed_api, requests_mock):
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        requests_mock.post(POOL_URL, status_code=401)
+        with pytest.raises(ConfigEntryAuthFailed):
             authed_api.get_pool()
 
 
@@ -184,9 +199,16 @@ class TestTurnOnDevice:
         authed_api.turn_on_device(0)
         assert m.last_request.headers["Authorization"] == "Bearer test-jwt-token"
 
-    def test_raises_on_http_error(self, authed_api, requests_mock):
+    def test_raises_update_failed_on_http_error(self, authed_api, requests_mock):
+        from homeassistant.helpers.update_coordinator import UpdateFailed
         requests_mock.post(SET_OUT_URL, status_code=500)
-        with pytest.raises(requests.HTTPError):
+        with pytest.raises(UpdateFailed):
+            authed_api.turn_on_device(1)
+
+    def test_raises_config_entry_auth_failed_on_401(self, authed_api, requests_mock):
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        requests_mock.post(SET_OUT_URL, status_code=401)
+        with pytest.raises(ConfigEntryAuthFailed):
             authed_api.turn_on_device(1)
 
 
@@ -307,6 +329,81 @@ class TestMaintenanceDetection:
         requests_mock.post(POOL_URL, json=SAMPLE_MAINTENANCE_RESPONSE, status_code=200)
         with pytest.raises(UpdateFailed):
             authed_api.get_pool()
+
+
+class TestMaintenanceWindowProactive:
+    """_is_maintenance_window() and the proactive skip in _post()."""
+
+    # ---- _is_maintenance_window unit tests ----
+
+    def test_sunday_inside_window_returns_true(self):
+        # Sunday 02:00 — inside 01:45–04:45
+        t = datetime(2026, 4, 19, 2, 0)  # Sunday
+        assert KlereoAPI._is_maintenance_window(t) is True
+
+    def test_sunday_before_window_returns_false(self):
+        # Sunday 01:44
+        t = datetime(2026, 4, 19, 1, 44)
+        assert KlereoAPI._is_maintenance_window(t) is False
+
+    def test_sunday_after_window_returns_false(self):
+        # Sunday 04:46
+        t = datetime(2026, 4, 19, 4, 46)
+        assert KlereoAPI._is_maintenance_window(t) is False
+
+    def test_sunday_at_window_start_returns_true(self):
+        t = datetime(2026, 4, 19, 1, 45)
+        assert KlereoAPI._is_maintenance_window(t) is True
+
+    def test_sunday_at_window_end_returns_true(self):
+        t = datetime(2026, 4, 19, 4, 45)
+        assert KlereoAPI._is_maintenance_window(t) is True
+
+    def test_tuesday_inside_window_returns_true(self):
+        # Tuesday 01:32 — inside 01:30–01:35
+        t = datetime(2026, 4, 21, 1, 32)  # Tuesday
+        assert KlereoAPI._is_maintenance_window(t) is True
+
+    def test_tuesday_outside_window_returns_false(self):
+        t = datetime(2026, 4, 21, 2, 0)
+        assert KlereoAPI._is_maintenance_window(t) is False
+
+    def test_monday_no_window_returns_false(self):
+        # Monday has no maintenance window
+        t = datetime(2026, 4, 20, 1, 32)  # Monday
+        assert KlereoAPI._is_maintenance_window(t) is False
+
+    def test_saturday_inside_window_returns_true(self):
+        t = datetime(2026, 4, 18, 1, 30)  # Saturday 01:30
+        assert KlereoAPI._is_maintenance_window(t) is True
+
+    def test_saturday_outside_window_returns_false(self):
+        t = datetime(2026, 4, 18, 1, 36)  # Saturday 01:36
+        assert KlereoAPI._is_maintenance_window(t) is False
+
+    # ---- proactive skip in _post() ----
+
+    def test_post_raises_update_failed_during_maintenance_without_http_call(
+        self, authed_api, requests_mock
+    ):
+        """During a maintenance window _post must raise UpdateFailed immediately,
+        without sending any HTTP request."""
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        with patch.object(KlereoAPI, '_is_maintenance_window', return_value=True):
+            m = requests_mock.post(POOL_URL, json=SAMPLE_GET_POOL_RESPONSE)
+            with pytest.raises(UpdateFailed, match="maintenance"):
+                authed_api.get_pool()
+            assert m.call_count == 0, "No HTTP request must be made during maintenance"
+
+    def test_post_proceeds_normally_outside_maintenance_window(
+        self, authed_api, requests_mock
+    ):
+        """Outside a maintenance window _post must proceed normally."""
+        with patch.object(KlereoAPI, '_is_maintenance_window', return_value=False):
+            requests_mock.post(POOL_URL, json=SAMPLE_GET_POOL_RESPONSE)
+            result = authed_api.get_pool()
+            assert result is not None
 
 
 # ── B3: Proactive JWT refresh (≥55 minutes) ───────────────────────────────────
@@ -436,8 +533,9 @@ class TestWaitCommand:
                 authed_api.wait_command(1)
 
     def test_raises_on_http_error(self, authed_api, requests_mock):
+        from homeassistant.exceptions import UpdateFailed
         requests_mock.post(WAIT_CMD_URL, status_code=500)
-        with pytest.raises(requests.HTTPError):
+        with pytest.raises(UpdateFailed):
             authed_api.wait_command(42)
 
 

@@ -14,6 +14,20 @@ _JWT_EXPIRED_DETAILS = {"jwt expired", "invalid jwt", "jwt invalid", "unauthoriz
 # Re-authenticate when the token is this old — Jeedom uses 55 min (token valid 60 min)
 _JWT_REFRESH_AFTER = timedelta(minutes=55)
 
+# Klereo server scheduled maintenance windows (local server time).
+# Format: {weekday: (from_hhmm, to_hhmm)} where weekday follows PHP date('w'):
+#   0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday
+# Monday (1) has no maintenance window.
+# Source: Jeedom plugin klereo.class.php $_MAINTENANCES
+_MAINTENANCE_WINDOWS: dict[int, tuple[int, int]] = {
+    0: (145, 445),   # Sunday   01:45 – 04:45
+    2: (130, 135),   # Tuesday  01:30 – 01:35
+    3: (130, 135),   # Wednesday 01:30 – 01:35
+    4: (130, 135),   # Thursday  01:30 – 01:35
+    5: (130, 135),   # Friday    01:30 – 01:35
+    6: (130, 135),   # Saturday  01:30 – 01:35
+}
+
 
 class KlereoAPI:
     def __init__(self, username, password, poolid):
@@ -29,6 +43,7 @@ class KlereoAPI:
 
     def get_jwt(self):
         import requests  # deferred — first import happens in executor thread
+        from homeassistant.exceptions import ConfigEntryAuthFailed
         url = f"{self.base_url}/GetJWT.php"
         hashed_password = self.hash_password()
         payload = {
@@ -37,12 +52,36 @@ class KlereoAPI:
             'version': HA_VERSION,
             'app': 'api'
         }
-        response = requests.post(url, data=payload)
-        response.raise_for_status()
-        self.jwt = response.json().get('jwt')
+        try:
+            response = requests.post(url, data=payload)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise ConfigEntryAuthFailed(f"Klereo authentication failed: {exc}") from exc
+        body = response.json()
+        if body.get('status') != 'ok' or not body.get('jwt'):
+            raise ConfigEntryAuthFailed(
+                f"Klereo authentication failed: {body.get('detail', 'no jwt in response')}"
+            )
+        self.jwt = body['jwt']
         self.jwt_acquired_at = datetime.now()
         LOGGER.debug("JWT refreshed successfully")
         return self.jwt
+
+    @staticmethod
+    def _is_maintenance_window(now: datetime | None = None) -> bool:
+        """Return True when the current local time falls inside a Klereo maintenance window.
+
+        Mirrors Jeedom's maintenance_ongoing(): uses PHP date('w') convention
+        (0=Sunday … 6=Saturday) and a compact HHMM integer for comparison.
+        """
+        t = now or datetime.now()
+        # PHP date('w'): 0=Sunday, 1=Monday, …, 6=Saturday
+        php_weekday = int(t.strftime('%w'))  # 0-6, same convention as PHP
+        window = _MAINTENANCE_WINDOWS.get(php_weekday)
+        if window is None:
+            return False
+        compact = t.hour * 100 + t.minute
+        return window[0] <= compact <= window[1]
 
     def _is_auth_error(self, body: dict) -> bool:
         """Return True when the JSON response signals an expired / invalid JWT."""
@@ -61,6 +100,12 @@ class KlereoAPI:
            re-authenticate once and retry.
         """
         import requests  # deferred — first import happens in executor thread
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+        # --- Proactive maintenance window skip (mirrors Jeedom curl_request guard) ---
+        if self._is_maintenance_window():
+            LOGGER.debug("Klereo server maintenance window active — skipping request")
+            raise UpdateFailed("Klereo server maintenance")
         # --- Proactive refresh (B3) ---
         if self.jwt is None or (
             self.jwt_acquired_at is not None
@@ -70,22 +115,39 @@ class KlereoAPI:
                 LOGGER.info("JWT is ≥55 min old — proactively refreshing before request")
             self.get_jwt()
         headers = {'Authorization': f'Bearer {self.jwt}'}
-        response = requests.post(url, headers=headers, data=payload or {})
-        response.raise_for_status()
+        try:
+            response = requests.post(url, headers=headers, data=payload or {})
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 401:
+                raise ConfigEntryAuthFailed(f"Klereo auth error (HTTP 401): {exc}") from exc
+            raise UpdateFailed(f"Klereo HTTP error: {exc}") from exc
+        except requests.RequestException as exc:
+            raise UpdateFailed(f"Klereo request failed: {exc}") from exc
         body = response.json()
         # --- Reactive refresh ---
         if self._is_auth_error(body):
             LOGGER.info("JWT expired — re-authenticating and retrying request")
             self.get_jwt()
             headers = {'Authorization': f'Bearer {self.jwt}'}
-            response = requests.post(url, headers=headers, data=payload or {})
-            response.raise_for_status()
+            try:
+                response = requests.post(url, headers=headers, data=payload or {})
+                response.raise_for_status()
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 401:
+                    raise ConfigEntryAuthFailed(f"Klereo auth error (HTTP 401): {exc}") from exc
+                raise UpdateFailed(f"Klereo HTTP error: {exc}") from exc
+            except requests.RequestException as exc:
+                raise UpdateFailed(f"Klereo request failed: {exc}") from exc
             body = response.json()
         return body
 
     def get_index(self):
+        from homeassistant.helpers.update_coordinator import UpdateFailed
         url = f"{self.base_url}/GetIndex.php"
         body = self._post(url)
+        if body.get('status') != 'ok' or 'response' not in body:
+            raise UpdateFailed(f"GetIndex unexpected response: {body.get('detail', body)}")
         index = body['response']
         LOGGER.info(f"Successfully obtained GetIndex: {index}")
         return index
@@ -133,9 +195,10 @@ class KlereoAPI:
             'newState': newState,
             'comMode': 1,
         }
+        from homeassistant.exceptions import HomeAssistantError
         body = self._post(url, payload)
         if body.get('status') != 'ok':
-            raise RuntimeError(f"SetOut failed: {body.get('detail', body)}")
+            raise HomeAssistantError(f"SetOut failed: {body.get('detail', body)}")
         cmd_id = body['response'][0]['cmdID']
         LOGGER.debug(f"SetOut cmdID={cmd_id}")
         return cmd_id
@@ -185,6 +248,61 @@ class KlereoAPI:
         """
         LOGGER.info(f"SetPumpSpeed #{self.poolid} out{outIdx} speed={speed}")
         cmd_id = self._set_out(outIdx, newMode=0, newState=speed)
+        self.wait_command(cmd_id)
+
+    def set_param(self, param_id: str, value: float) -> None:
+        """Write a regulation setpoint via SetParam.php.
+
+        Valid param_id values: "ConsigneEau", "ConsignePH", "ConsigneRedox",
+        "ConsigneChlore".  Returns `cmdID` from the response and verifies it
+        with WaitCommand before returning.
+
+        Access level gates (checked by the server — will raise HomeAssistantError
+        on insufficient rights, code 13):
+          - ConsigneEau   : access >= 10 (end-user)
+          - ConsignePH, ConsigneRedox, ConsigneChlore : access >= 16 (advanced)
+        """
+        from homeassistant.exceptions import HomeAssistantError
+        LOGGER.info(f"SetParam #{self.poolid} {param_id}={value}")
+        url = f"{self.base_url}/SetParam.php"
+        payload = {
+            'poolID': self.poolid,
+            'paramID': param_id,
+            'newValue': value,
+            'comMode': 1,
+        }
+        body = self._post(url, payload)
+        if body.get('status') != 'ok':
+            raise HomeAssistantError(f"SetParam failed: {body.get('detail', body)}")
+        cmd_id = body['response'][0]['cmdID']
+        LOGGER.debug(f"SetParam cmdID={cmd_id}")
+        self.wait_command(cmd_id)
+
+    def set_auto_off(self, out_idx: int, off_delay: int) -> None:
+        """Set the timer auto-off delay (in minutes) for a timer-capable output.
+
+        Valid for output indices: 0, 5, 6, 7, 9, 10, 11, 12, 13, 14.
+        ``off_delay`` must be 1–600 (minutes).  Raises ``HomeAssistantError`` if
+        the pool controller rejects the command (e.g. pool not connected, bad
+        output index).
+
+        Note: this only sets the *delay value* — it does NOT activate timer mode.
+        Activating timer mode requires a separate SetOut call (newMode=2, newState=2).
+        """
+        from homeassistant.exceptions import HomeAssistantError
+        LOGGER.info(f"SetAutoOff #{self.poolid} out{out_idx} offDelay={off_delay}min")
+        url = f"{self.base_url}/SetAutoOff.php"
+        payload = {
+            'poolID':   self.poolid,
+            'outIdx':   out_idx,
+            'offDelay': int(off_delay),
+            'comMode':  1,
+        }
+        body = self._post(url, payload)
+        if body.get('status') != 'ok':
+            raise HomeAssistantError(f"SetAutoOff failed: {body.get('detail', body)}")
+        cmd_id = body['response'][0]['cmdID']
+        LOGGER.debug(f"SetAutoOff cmdID={cmd_id}")
         self.wait_command(cmd_id)
 
     def set_device_mode(self, outIdx, mode):

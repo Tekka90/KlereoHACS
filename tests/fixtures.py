@@ -80,6 +80,7 @@ SAMPLE_POOL_DATA = {
             "mode": 2,          # Timer
             "status": 0,        # off
             "realStatus": 0,
+            "offDelay": 30,     # 30 minutes
             "updateTime": 1712000000,
         },
         {
@@ -88,6 +89,7 @@ SAMPLE_POOL_DATA = {
             "mode": 1,          # Time slots
             "status": 2,        # auto
             "realStatus": 1,
+            "offDelay": None,   # Filtration does not support offDelay
             "updateTime": 1712000000,
         },
         {
@@ -96,6 +98,16 @@ SAMPLE_POOL_DATA = {
             "mode": 0,          # Manual
             "status": 0,
             "realStatus": 0,
+            "offDelay": None,   # Heating does not support offDelay
+            "updateTime": 1712000000,
+        },
+        {
+            "index": 5,         # Auxiliary 1
+            "type": 1,
+            "mode": 0,          # Manual
+            "status": 0,
+            "realStatus": 0,
+            "offDelay": 60,     # 60 minutes
             "updateTime": 1712000000,
         },
     ],
@@ -131,7 +143,13 @@ SAMPLE_POOL_DATA = {
         {"ioType": 1, "ioIndex": 1, "name": "Filtration"},
     ],
     "alerts": [],
-    "plans": [],
+    # plans: list of {index, plan64}.
+    # plan index 1 = Filtration (out index 1).
+    # Encoded schedule: slots 0-3 ON (00:00-01:00), slots 4-95 OFF.
+    # Raw bytes: 0x0F followed by 11 x 0x00  →  base64 = "DwAAAAAAAAAAAAAA" (16 chars, no padding)
+    "plans": [
+        {"index": 1, "plan64": "DwAAAAAAAAAAAAAA"},
+    ],
 }
 
 # ── Wrapped response structures ───────────────────────────────────────────────
@@ -163,6 +181,16 @@ SAMPLE_WAIT_COMMAND_POOL_NOT_CONNECTED = {
 SAMPLE_MAINTENANCE_RESPONSE = {
     "status": "error",
     "detail": "maintenance",
+}
+
+SAMPLE_SET_PARAM_RESPONSE = {
+    "status": "ok",
+    "response": [{"cmdID": 77, "poolID": 12345}],
+}
+
+SAMPLE_SET_AUTO_OFF_RESPONSE = {
+    "status": "ok",
+    "response": [{"cmdID": 88, "poolID": 12345}],
 }
 
 # ── Hybrid pool variant ───────────────────────────────────────────────────────

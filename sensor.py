@@ -221,7 +221,7 @@ _PARAM_SENSORS: list[KlereoParamDescription] = [
         native_unit_of_measurement=None,
         device_class=SensorDeviceClass.PH,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: float(d.get("params", {})["ConsignePH"])
+        value_fn=lambda d: round(float(d.get("params", {})["ConsignePH"]), 2)
                            if d.get("params", {}).get("ConsignePH") not in (None, -2000, -1000) else None,
     ),
     KlereoParamDescription(
@@ -230,7 +230,7 @@ _PARAM_SENSORS: list[KlereoParamDescription] = [
         native_unit_of_measurement="mV",
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: float(d.get("params", {})["ConsigneRedox"])
+        value_fn=lambda d: round(float(d.get("params", {})["ConsigneRedox"]), 1)
                            if d.get("params", {}).get("ConsigneRedox") not in (None, -2000, -1000) else None,
     ),
     KlereoParamDescription(
@@ -239,7 +239,7 @@ _PARAM_SENSORS: list[KlereoParamDescription] = [
         native_unit_of_measurement="mg/L",
         device_class=None,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda d: float(d.get("params", {})["ConsigneChlore"])
+        value_fn=lambda d: round(float(d.get("params", {})["ConsigneChlore"]), 2)
                            if d.get("params", {}).get("ConsigneChlore") not in (None, -2000, -1000) else None,
     ),
     # Chlorine pump runtime (hours) — separate from volume consumed

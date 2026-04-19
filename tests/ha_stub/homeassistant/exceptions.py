@@ -1,4 +1,5 @@
 """Stub: homeassistant.exceptions"""
+from homeassistant.helpers.update_coordinator import UpdateFailed  # noqa: F401
 
 
 class HomeAssistantError(Exception):
@@ -11,7 +12,4 @@ class ConfigEntryAuthFailed(HomeAssistantError):
 
 class ConfigEntryNotReady(HomeAssistantError):
     pass
-
-
-class UpdateFailed(HomeAssistantError):
     pass

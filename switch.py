@@ -1,10 +1,12 @@
+import base64
+import logging
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 
-import logging
 LOGGER = logging.getLogger(__name__)
 
 # Human-readable labels — derived from the Jeedom klereo reference implementation
@@ -26,6 +28,105 @@ _OUT_STATUS_LABELS = {
     1: "on",
     2: "auto",
 }
+
+# Default human-readable names per output index — from Jeedom getOutInfo()
+_OUT_INDEX_NAME = {
+    0:  "Lighting",
+    1:  "Filtration",
+    2:  "pH corrector",
+    3:  "Disinfectant",
+    4:  "Heating",
+    5:  "Auxiliary 1",
+    6:  "Auxiliary 2",
+    7:  "Auxiliary 3",
+    8:  "Flocculant",
+    9:  "Auxiliary 4",
+    10: "Auxiliary 5",
+    11: "Auxiliary 6",
+    12: "Auxiliary 7",
+    13: "Auxiliary 8",
+    14: "Auxiliary 9",
+    15: "Hybrid disinfectant",
+}
+
+
+# Mapping from output index to plan index — from Jeedom getOutInfo().
+# The plan index is used to look up entries in details['plans'].
+# None = output has no time-slot schedule (Heating, pH corrector).
+_OUT_PLAN_INDEX: dict[int, int | None] = {
+    0:  0,    # Lighting
+    1:  1,    # Filtration
+    2:  None, # pH corrector — no plan
+    3:  3,    # Disinfectant
+    4:  None, # Heating — no plan
+    5:  5,    # Auxiliary 1
+    6:  6,    # Auxiliary 2
+    7:  7,    # Auxiliary 3
+    8:  4,    # Flocculant (plan index 4, out index 8)
+    9:  8,    # Auxiliary 4
+    10: 9,    # Auxiliary 5
+    11: 10,   # Auxiliary 6
+    12: 11,   # Auxiliary 7
+    13: 12,   # Auxiliary 8
+    14: 13,   # Auxiliary 9
+    15: 2,    # Hybrid disinfectant
+}
+
+
+def decode_plan(plan64: str) -> list[bool]:
+    """Decode a Klereo plan64 schedule string to 96 booleans.
+
+    Each boolean corresponds to a 15-minute slot over 24 hours,
+    starting at 00:00. True = output is ON during that slot.
+
+    Mirrors Jeedom plan2arr(): base64-decode the 12-byte payload,
+    then extract bits LSB-first per byte (equivalent to PHP
+    unpack('h*', ...) + reversed nibble iteration).
+    """
+    raw = base64.b64decode(plan64)
+    slots: list[bool] = []
+    for byte in raw:
+        for bit in range(8):
+            slots.append(bool((byte >> bit) & 1))
+    return slots
+
+
+def _plan_active_periods(slots: list[bool]) -> list[str]:
+    """Convert 96 boolean time-slots to a list of 'HH:MM-HH:MM' active period strings."""
+    periods: list[str] = []
+    in_period = False
+    start = 0
+    for i, active in enumerate(slots):
+        if active and not in_period:
+            start = i
+            in_period = True
+        elif not active and in_period:
+            periods.append(_format_slot_range(start, i))
+            in_period = False
+    if in_period:
+        periods.append(_format_slot_range(start, len(slots)))
+    return periods
+
+
+def _format_slot_range(start_slot: int, end_slot: int) -> str:
+    """Format a half-open slot range [start, end) as 'HH:MM-HH:MM'."""
+    s = start_slot * 15
+    e = end_slot * 15
+    return f"{s // 60:02d}:{s % 60:02d}-{e // 60:02d}:{e % 60:02d}"
+
+
+def _out_friendly_name(out_index: int, pool_data: dict) -> str:
+    """Return a human-readable name for an output.
+
+    Priority:
+    1. User-defined rename from pool_data['IORename'] (ioType=1)
+    2. Index-based default from _OUT_INDEX_NAME
+    3. Fallback: 'Output {index}'
+    """
+    for rename in pool_data.get('IORename', []) or []:
+        if rename.get('ioType') == 1 and rename.get('ioIndex') == out_index:
+            return rename['name']
+    return _OUT_INDEX_NAME.get(out_index, f"Output {out_index}")
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
     
@@ -58,11 +159,12 @@ class KlereoOut(CoordinatorEntity, SwitchEntity):
     def __init__(self, api, coordinator, out, poolid):
         super().__init__(coordinator)
         self._api = api
-        self._name = f"klereo{poolid}out{out['index']}"
         self._index = out['index']
         self._type = out['type']
         self._mode = out['mode']
         self._poolid = poolid
+        friendly = _out_friendly_name(out['index'], coordinator.data)
+        self._name = f"{friendly} ({poolid})"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -95,7 +197,7 @@ class KlereoOut(CoordinatorEntity, SwitchEntity):
 
     @property
     def unique_id(self):
-        return f"id_{self._name}"
+        return f"id_klereo{self._poolid}out{self._index}"
 
     @property
     def extra_state_attributes(self):
@@ -106,6 +208,18 @@ class KlereoOut(CoordinatorEntity, SwitchEntity):
                 status = out['status']
                 mode_label = _OUT_MODE_LABELS.get(mode, f"unknown({mode})")
                 status_label = _OUT_STATUS_LABELS.get(status, f"unknown({status})")
+
+                # Decode time-slot schedule from plans array, if available
+                schedule: list[str] | None = None
+                plan_index = _OUT_PLAN_INDEX.get(self._index)
+                if plan_index is not None:
+                    for plan_entry in self.coordinator.data.get('plans', []) or []:
+                        if plan_entry.get('index') == plan_index:
+                            plan64 = plan_entry.get('plan64', '')
+                            if plan64:
+                                schedule = _plan_active_periods(decode_plan(plan64))
+                            break
+
                 return {
                     'Time': out['updateTime'],
                     'Type': out['type'],
@@ -114,6 +228,8 @@ class KlereoOut(CoordinatorEntity, SwitchEntity):
                     'Status': status,
                     'status_reason': status_label,
                     'RealStatus': out['realStatus'],
+                    'offDelay': out.get('offDelay'),
+                    'schedule': schedule,
                 }
         return None
 
