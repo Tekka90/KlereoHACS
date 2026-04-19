@@ -4,8 +4,10 @@
     "version": "1.0.0",
     "requirements": ["requests"],
     "dependencies": [],
-    "codeowners": ["@ldousset-klr"],
-    "documentation": "https://connect.klereo.fr/software/whatsnew.html",
-    "iot_class": "cloud_polling",  
+    "codeowners": ["@Tekka90"],
+    "documentation": "https://github.com/Tekka90/KlereoHACS",
+    "issue_tracker": "https://github.com/Tekka90/KlereoHACS/issues",
+    "iot_class": "cloud_polling",
+    "hacs": "2.0.0",
     "config_flow": true
 }

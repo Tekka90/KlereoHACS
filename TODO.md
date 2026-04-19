@@ -7,28 +7,27 @@
 
 ## 🟠 Medium Priority — Reliability & Robustness
 
-- [ ] **[B8] Implement `set_device_mode()` in `KlereoAPI`**
-  - Currently an empty stub.
-  - Signature: `set_device_mode(self, outIdx, mode, state=2)` — calls `SetOut.php` with
-    the chosen `newMode` and `newState=2` (Auto).
+- [x] **[B8] Implement `set_device_mode()` in `KlereoAPI`**
+  - `set_device_mode(self, outIdx, mode, state=2)` calls `_set_out()` with the chosen
+    `newMode` and `newState=2` (Auto by default), then verifies via `wait_command()`.
 
-- [ ] **Add proper exception handling in `klereo_api.py`**
-  - Wrap all `requests.post()` calls in try/except.
-  - Raise `homeassistant.exceptions.ConfigEntryAuthFailed` on HTTP 401 / `status: error` +
-    auth-related `detail`.
-  - Raise `homeassistant.exceptions.UpdateFailed` for all other errors so the coordinator
+- [x] **Add proper exception handling in `klereo_api.py`**
+  - `_post()` wraps all `requests.post()` calls in try/except.
+  - `ConfigEntryAuthFailed` raised on HTTP 401 and auth-related `detail` strings.
+  - `UpdateFailed` raised for all other HTTP/request errors so the coordinator
     marks entities as unavailable instead of crashing.
+  - `get_jwt()` raises `ConfigEntryAuthFailed` on any auth failure.
 
 ---
 
 ## 🟡 Low Priority — Features & UX
 
-- [ ] **[B7] Auto-discover pool ID via `GetIndex.php` in the config flow**
+- [x] **[B7] Auto-discover pool ID via `GetIndex.php` in the config flow**
   - Currently the user must manually enter `poolID` via browser DevTools.
   - After entering username + password, call `GetIndex.php` and present a dropdown selector
     populated with `poolNickname (idSystem)` entries.
 
-- [ ] **[B9] Proper cleanup in `async_unload_entry`**
+- [x] **[B9] Proper cleanup in `async_unload_entry`**
   - Currently only removes `hass.data[DOMAIN][entry_id]`.
   - Should also call `coordinator.async_shutdown()` to cancel the background update loop.
 
@@ -41,17 +40,17 @@ Reference: **https://www.hacs.xyz/docs/publish/**
 
 ### Repository & metadata
 
-- [ ] **Fix invalid JSON in `manifest.json`**
+- [x] **Fix invalid JSON in `manifest.json`**
   - Trailing comma after `"iot_class": "cloud_polling"` makes the file invalid JSON.
   - Remove it — HA and HACS both reject non-standard JSON.
 
-- [ ] **Add `issue_tracker` field to `manifest.json`**
+- [x] **Add `issue_tracker` field to `manifest.json`**
   - Required by HACS: `"issue_tracker": "https://github.com/Tekka90/KlereoHACS/issues"`
 
-- [ ] **Add `hacs` minimum-version field to `manifest.json`**
+- [x] **Add `hacs` minimum-version field to `manifest.json`**
   - Required by HACS: `"hacs": "2.0.0"` (or the minimum version that introduced the APIs used)
 
-- [ ] **Create `hacs.json` at the repository root**
+- [x] **Create `hacs.json` at the repository root**
   - Minimum content:
     ```json
     {
@@ -61,48 +60,22 @@ Reference: **https://www.hacs.xyz/docs/publish/**
     ```
   - `render_readme: true` causes HACS to display `README.md` as the integration description.
 
-- [ ] **Ensure `codeowners` in `manifest.json` matches the GitHub account**
+- [x] **Ensure `codeowners` in `manifest.json` matches the GitHub account**
   - Currently `"@ldousset-klr"` (upstream author). Change to `"@Tekka90"` since this is the
     actively maintained fork that will be submitted.
 
-- [ ] **Ensure `README.md` is at the repository root**
-  - Currently at `custom_components/klereo/README.md` — HACS expects it at the **repo root**.
-  - Either move it or add a root-level `README.md` that documents installation, configuration,
-    and known limitations. The current content is already excellent — just relocate it.
+- [x] **Ensure `README.md` is at the repository root**
+  - `README.md` is already at the repo root. ✅
 
 ### CI / validation workflows
 
-- [ ] **Add HACS Action workflow (`.github/workflows/validate.yml`)**
+- [x] **Add HACS Action workflow (`.github/workflows/validate.yml`)**
   - Runs `hacs/action@main` on every push / PR to catch HACS compliance regressions early.
-  - Minimum content:
-    ```yaml
-    name: HACS Validation
-    on: [push, pull_request]
-    jobs:
-      validate:
-        runs-on: ubuntu-latest
-        steps:
-          - uses: actions/checkout@v4
-          - uses: hacs/action@main
-            with:
-              category: integration
-    ```
 
-- [ ] **Add `hassfest` validation workflow (`.github/workflows/hassfest.yml`)**
+- [x] **Add `hassfest` validation workflow (`.github/workflows/hassfest.yml`)**
   - Validates `manifest.json`, translations, and integration structure against HA's own rules.
-  - Minimum content:
-    ```yaml
-    name: Validate with hassfest
-    on: [push, pull_request]
-    jobs:
-      validate:
-        runs-on: ubuntu-latest
-        steps:
-          - uses: actions/checkout@v4
-          - uses: home-assistant/actions/hassfest@master
-    ```
 
-- [ ] **Add unit test CI workflow (`.github/workflows/tests.yml`)**
+- [x] **Add unit test CI workflow (`.github/workflows/tests.yml`)**
   - Runs `pytest tests/unit/` on every push / PR to prevent regressions reaching main.
 
 ### Release management

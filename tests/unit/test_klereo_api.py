@@ -595,3 +595,77 @@ class TestTurnOnOffWithWaitCommand:
         requests_mock.post(WAIT_CMD_URL, json=fail_resp)
         with pytest.raises(HomeAssistantError):
             authed_api.turn_off_device(0)
+
+
+# ── set_device_mode ───────────────────────────────────────────────────────────
+
+class TestSetDeviceMode:
+    """[B8] set_device_mode() calls SetOut.php with the chosen newMode and
+    defaults to newState=2 (Auto), then verifies via WaitCommand.
+    """
+
+    def test_sends_mode_and_default_state_auto(self, authed_api, requests_mock):
+        """Default state must be 2 (Auto) so the output follows the mode immediately."""
+        m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.set_device_mode(0, mode=1)
+        body = m.last_request.body or ""
+        assert "outIdx=0" in body
+        assert "newMode=1" in body
+        assert "newState=2" in body
+
+    def test_explicit_state_overrides_default(self, authed_api, requests_mock):
+        """Caller can override state (e.g. state=0 to disable the output)."""
+        m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.set_device_mode(5, mode=2, state=0)
+        body = m.last_request.body or ""
+        assert "newMode=2" in body
+        assert "newState=0" in body
+
+    def test_sends_pool_id(self, authed_api, requests_mock):
+        m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.set_device_mode(1, mode=4)
+        body = m.last_request.body or ""
+        assert "poolID=12345" in body
+
+    def test_sends_com_mode_1(self, authed_api, requests_mock):
+        m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.set_device_mode(0, mode=0)
+        body = m.last_request.body or ""
+        assert "comMode=1" in body
+
+    def test_sends_auth_header(self, authed_api, requests_mock):
+        m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.set_device_mode(0, mode=0)
+        assert m.last_request.headers["Authorization"] == "Bearer test-jwt-token"
+
+    def test_calls_wait_command_with_cmd_id(self, authed_api, requests_mock):
+        """The cmdID from SetOut must be forwarded to WaitCommand."""
+        requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)  # cmdID=42
+        wait_m = requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.set_device_mode(0, mode=1)
+        assert "cmdID=42" in (wait_m.last_request.body or "")
+
+    def test_raises_home_assistant_error_if_pool_not_connected(self, authed_api, requests_mock):
+        """WaitCommand status 17 (pool not connected) must surface as HomeAssistantError."""
+        from homeassistant.exceptions import HomeAssistantError
+        requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_POOL_NOT_CONNECTED)
+        with pytest.raises(HomeAssistantError, match="Pool not connected"):
+            authed_api.set_device_mode(0, mode=1)
+
+    def test_raises_update_failed_on_http_error(self, authed_api, requests_mock):
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+        requests_mock.post(SET_OUT_URL, status_code=500)
+        with pytest.raises(UpdateFailed):
+            authed_api.set_device_mode(1, mode=2)
+
+    def test_raises_config_entry_auth_failed_on_401(self, authed_api, requests_mock):
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        requests_mock.post(SET_OUT_URL, status_code=401)
+        with pytest.raises(ConfigEntryAuthFailed):
+            authed_api.set_device_mode(1, mode=2)

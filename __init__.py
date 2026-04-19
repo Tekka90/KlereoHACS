@@ -55,5 +55,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LOGGER.info("Unloading %s integration",DOMAIN)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        entry_data = hass.data[DOMAIN].pop(entry.entry_id)
+        coordinator = entry_data["coordinator"]
+        coordinator.async_shutdown()
+        LOGGER.info("Coordinator shut down for pool #%s", entry.data.get('poolid'))
     return unload_ok

@@ -305,7 +305,22 @@ class KlereoAPI:
         LOGGER.debug(f"SetAutoOff cmdID={cmd_id}")
         self.wait_command(cmd_id)
 
-    def set_device_mode(self, outIdx, mode):
-        LOGGER.info(f"Changemode #{outIdx} mode={mode}")
-        
+    def set_device_mode(self, outIdx: int, mode: int, state: int = 2) -> None:
+        """Set the operating mode of an output without changing its on/off state.
+
+        ``mode`` must be one of the ``_OUT_MODE_*`` constants (0, 1, 2, 3, 4, 6, 8, 9).
+        Do NOT use 5 or 7 — those are Klereo-internal values.
+
+        ``state`` defaults to 2 (Auto) so the output follows the new mode's
+        schedule/regulation logic immediately, which mirrors Jeedom behaviour.
+        Use state=0 to disable the output, or state=1 to force it on.
+
+        Not applicable for outputs 2, 3, 4, 8, 15 (Pro/heating outputs that
+        have no user-selectable mode field) — for those, call turn_on/turn_off
+        or set a setpoint via set_param().
+        """
+        LOGGER.info(f"SetDeviceMode #{self.poolid} out{outIdx} mode={mode} state={state}")
+        cmd_id = self._set_out(outIdx, newMode=mode, newState=state)
+        self.wait_command(cmd_id)
+
 
