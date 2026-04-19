@@ -1,9 +1,6 @@
-# Source !
-This project is a fork of the initial work from Laurent Dousset from Klereo: https://github.com/ldousset-klr/KlereoHACS
-I created this fork to try and continue the implementation leveraging copilot + jeedom existing pluggin : https://github.com/MrWaloo/jeedom-klereo
-I cannot thank enough those 2 projects ! And hopefully, I will manage to get something as evolved in HA too !!
+# Klereo Connect — Home Assistant Integration
 
-# Home Assistant HACS integration for KLEREO swimming pools
+[![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 
 A Home Assistant custom integration (HACS-installable) for the
 [Klereo Connect](https://connect.klereo.fr) swimming-pool management system.
@@ -13,37 +10,55 @@ It polls the Klereo cloud REST API and exposes:
 - **Probe sensors** — temperature, pH, Redox, pressure, flow… (one entity per probe, correct `device_class` and unit auto-assigned from probe type)
 - **Params sensors** — filtration/heating run times, chemical consumption, setpoints
 - **Enum sensors** — pool mode, disinfectant type, pH corrector type, heater type
+- **Alert sensors** — active alert count + human-readable alert descriptions
 - **Output switches** — filtration, lighting, electrolysis, heating, auxiliaries…
+- **Number entities** — writable setpoints (water temp, pH, Redox, chlorine) and timer delays
+- **Select entity** — variable-speed pump speed (when supported by the pool hardware)
 
-All entities are configurable through the HA UI, no YAML required.
+All entities are configured through the HA UI — no YAML required.
+
+---
+
+## Prerequisites
+
+- A [Klereo Connect](https://connect.klereo.fr) account
+- A Klereo-compatible pool controller (Klereo Care, Premium, Kompact, or Kalypso Pro)
+- The controller must be connected to the Klereo cloud (internet access required)
+- Home Assistant 2024.1 or newer
 
 ---
 
 ## Installation
 
-1. Copy (or install via HACS) into `config/custom_components/KlereoHACS`
+### Via HACS (recommended)
+
+1. Open HACS in Home Assistant
+2. Go to **Integrations → Custom repositories**
+3. Add `https://github.com/Tekka90/KlereoHACS` with category **Integration**
+4. Search for **Klereo** and click **Download**
+5. Restart Home Assistant
+6. Go to **Settings → Devices & Services → Add Integration → Klereo Connect**
+7. Enter your Klereo username and password — your pools are discovered automatically
+8. Select your pool from the dropdown and click **Submit**
+
+### Manual installation
+
+1. Copy the `klereo/` folder into your `config/custom_components/` directory
 2. Restart Home Assistant
 3. Go to **Settings → Devices & Services → Add Integration → Klereo Connect**
-4. Enter your Klereo username, password, and pool ID (see below)
 
 ---
 
-## Finding your Pool ID
+## Configuration
 
-Your **Pool ID** (`idSystem`) can be retrieved from the Klereo API:
+All configuration is done through the UI. After adding the integration:
 
-```
-POST https://connect.klereo.fr/php/GetIndex.php
-Authorization: Bearer <your_jwt>
-```
+1. **Step 1 — Credentials**: Enter your Klereo username and password. The integration
+   authenticates against `GetJWT.php` and fetches your pool list from `GetIndex.php`.
+2. **Step 2 — Pool selection**: Choose your pool from the dropdown (shows
+   `poolNickname (idSystem)` for each pool on your account).
 
-The `response[].idSystem` field contains the pool ID.  
-A future version of this integration will present a dropdown populated from `GetIndex.php`
-so you no longer need to look this up manually.
-
-For now, the easiest method is to open the Klereo web app in your browser, open DevTools
-(F12), go to the **Network** tab, and look for the `GetIndex.php` or `GetPoolDetails.php`
-request to find your `idSystem`.
+No YAML configuration is required or supported.
 
 ---
 
@@ -136,6 +151,8 @@ Each switch also exposes the following extra state attributes:
 | `RealStatus` | int | `1` | Physical relay state reported by the controller |
 | `Type` | int | `1` | Output type code |
 | `Time` | int | `1712000000` | Epoch timestamp of last change |
+| `offDelay` | int | `60` | Current timer auto-off delay in minutes (timer-capable outputs only) |
+| `schedule` | list | `["08:00-10:00", "18:00-20:00"]` | Active periods decoded from the time-slot schedule |
 
 **`control_mode` values:**
 
@@ -156,6 +173,54 @@ Each switch also exposes the following extra state attributes:
 | `off` | Output is off |
 | `on` | Output is manually forced on |
 | `auto` | Output is on because of a schedule, timer, or regulation |
+
+### Number entities — writable setpoints
+
+Writable `number` entities are created for each regulation setpoint that is enabled on your
+pool. Writing a value calls `SetParam.php` and waits for confirmation.
+
+| Entity | `params` key | Unit | Step | Access required |
+|---|---|---|---|---|
+| Heating setpoint | `ConsigneEau` | °C | 0.5 | `access ≥ 10` |
+| pH setpoint | `ConsignePH` | — | 0.1 | `access ≥ 16` |
+| Redox setpoint | `ConsigneRedox` | mV | 1 | `access ≥ 16` |
+| Chlorine setpoint | `ConsigneChlore` | mg/L | 0.1 | `access ≥ 16` |
+
+Min/max bounds are read dynamically from `params` (`EauMin`/`EauMax`, `pHMin`/`pHMax`,
+`OrpMin`/`OrpMax`). Entities with sentinel values (−2000 = disabled, −1000 = unknown)
+are hidden from HA.
+
+### Number entities — timer delay
+
+For outputs that support Timer mode (`[0, 5, 6, 7, 9, 10, 11, 12, 13, 14]`), a writable
+`number` entity controls the auto-off delay (1–600 minutes) via `SetAutoOff.php`.
+Setting the delay does **not** activate timer mode — it only changes the duration used
+when timer mode is active.
+
+### Select entity — variable-speed pump
+
+When `PumpMaxSpeed > 1` (variable-speed / analogue pump), the filtration switch is
+**replaced** by a `select` entity with options: `Off`, `Speed 1`, …, `Full speed`.
+The number of speed options is determined entirely by `PumpMaxSpeed` from the API.
+Selecting a speed calls `SetOut.php` with `newState=<speed index>`.
+
+### Alert sensors
+
+| Entity | Description |
+|---|---|
+| Alert Count | Number of currently active alerts (integer) |
+| Active Alerts | Human-readable description of all active alerts joined by ` \|\| ` |
+
+Alert data comes from the `alerts[]` array in `GetIndex.php` and is updated every
+coordinator cycle.
+
+### Pool metadata sensors
+
+| Entity | Source field | Values |
+|---|---|---|
+| Product | `ProductIdx` | Care/Premium, Kompact M5, Kompact Plus M5, Kalypso Pro Salt, Kompact M9, Kompact Plus M9, Kompact Plus M2 |
+| Pump Type | `PumpType` | Generic, KlereoFlô RS485, Pentair, None |
+| Electrolyser Range | `isLowSalt` | 5 g/h, 2 g/h |
 
 ---
 
@@ -359,9 +424,8 @@ The project uses `pytest` with a local `.venv`. All test dependencies are in
 `requirements-test.txt`.
 
 ```bash
-# First-time setup
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-test.txt
+# First-time setup (creates venv, installs deps, copies HA stub into site-packages)
+bash setup_test_env.sh
 
 # Run unit tests (no network, no credentials needed)
 .venv/bin/pytest tests/unit/
@@ -396,6 +460,24 @@ planned features (including features inspired by the Jeedom Klereo plugin).
 
 ---
 
+## Known Limitations
+
+- **Cloud polling only** — all data comes from the Klereo cloud API. Local/LAN access is
+  not supported by the Klereo hardware.
+- **5-minute update interval** — entities reflect the state as of the last API poll.
+  There is no push/webhook mechanism.
+- **Maintenance windows** — the Klereo API server is offline for short windows each night
+  (Sunday 01:45–04:45, Mon–Sat 01:30–01:35 except Monday). Entities will become
+  unavailable during these windows and recover automatically afterwards.
+- **Time-slot schedules are read-only** — the `schedule` attribute decodes the current
+  programmed schedule for display. Writing schedules back requires a `SetPlan` endpoint
+  that is not yet documented by Klereo.
+- **Pro outputs** (pH corrector, disinfectant, flocculant, hybrid disinfectant) require
+  `access ≥ 20` (professional account) to control.
+- **pH/Redox/Chlorine setpoints** require `access ≥ 16` to write.
+
+---
+
 ## Disclaimer
 
 This integration is provided **as-is**, without any warranties or guarantees of any kind.
@@ -404,5 +486,14 @@ arising from the installation or usage of this integration.
 
 Use at your own risk. Back up your Home Assistant configuration before installing.
 This integration is community-driven and is **not officially endorsed or supported by Klereo**.
+
+---
+
+## Acknowledgements
+
+- [Laurent Dousset (@ldousset-klr)](https://github.com/ldousset-klr/KlereoHACS) — original
+  KlereoHACS integration that this project is forked from
+- [MrWaloo / jeedom-klereo](https://github.com/MrWaloo/jeedom-klereo) — Jeedom plugin whose
+  source code documented many undiscovered API endpoints and edge cases used in this integration
 
 
