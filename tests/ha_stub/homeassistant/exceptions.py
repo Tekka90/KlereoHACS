@@ -11,3 +11,7 @@ class ConfigEntryAuthFailed(HomeAssistantError):
 
 class ConfigEntryNotReady(HomeAssistantError):
     pass
+
+
+class UpdateFailed(HomeAssistantError):
+    pass

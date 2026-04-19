@@ -36,11 +36,16 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     pool_data=coordinator.data;
     outs = pool_data["outs"]
     poolid = pool_data['idSystem']
+    pump_max_speed = int(pool_data.get('PumpMaxSpeed', 0))
     # Add switches
     switches = []
     for out in outs:
         if out.get('type') is None:  # unconnected/unwired output — skip
             LOGGER.debug(f"Skipping null-type out#{out['index']} for #{poolid}")
+            continue
+        if out['index'] == 1 and pump_max_speed > 1:
+            # Variable-speed analogue pump — handled by the number platform
+            LOGGER.debug(f"Skipping filtration out#1 for #{poolid}: variable-speed pump (max={pump_max_speed})")
             continue
         LOGGER.info(f"Adding out for #{poolid}: {out}")
         switches.append(KlereoOut(api,coordinator,out,poolid))

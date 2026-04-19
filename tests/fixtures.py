@@ -150,6 +150,16 @@ SAMPLE_SET_OUT_RESPONSE = {
     "response": [{"cmdID": 42, "poolID": 12345}],
 }
 
+# WaitCommand.php response — note: response is a dict, not a list (from Jeedom source)
+SAMPLE_WAIT_COMMAND_SUCCESS = {
+    "status": "ok",
+    "response": {"status": 9, "cmdID": 42},   # 9 = Success
+}
+SAMPLE_WAIT_COMMAND_POOL_NOT_CONNECTED = {
+    "status": "ok",
+    "response": {"status": 17, "cmdID": 42},  # 17 = Pool not connected
+}
+
 SAMPLE_MAINTENANCE_RESPONSE = {
     "status": "error",
     "detail": "maintenance",
@@ -168,3 +178,11 @@ SAMPLE_HYBRID_POOL_DATA["ExtraParams"] = {
 # Remove ElectroChlore keys to prove the sensor doesn't fall back to them
 del SAMPLE_HYBRID_POOL_DATA["params"]["ElectroChlore_TodayTime"]
 del SAMPLE_HYBRID_POOL_DATA["params"]["ElectroChlore_TotalTime"]
+
+# ── Variable-speed pump pool variant ─────────────────────────────────────────
+# PumpMaxSpeed=3 means the filtration output accepts speed 0–3 instead of 0/1.
+SAMPLE_VARSPEED_POOL_DATA = _copy.deepcopy(SAMPLE_POOL_DATA)
+SAMPLE_VARSPEED_POOL_DATA["PumpMaxSpeed"] = 3
+# Simulate pump running at speed 2
+SAMPLE_VARSPEED_POOL_DATA["outs"][1]["realStatus"] = 2   # out index 1 = filtration
+SAMPLE_VARSPEED_POOL_DATA["outs"][1]["status"] = 2

@@ -48,13 +48,15 @@
   - Implement the same: store `self.jwt_acquired_at = datetime.now()` and call `get_jwt()`
     again when `(now - jwt_acquired_at) > timedelta(minutes=55)`.
 
-- [ ] **[B4] Add `WaitCommand` / `CommandStatus` verification after `SetOut`**
-  - `turn_on_device` and `turn_off_device` call `SetOut.php` but never check the returned
-    `cmdID` against `WaitCommand.php`.
-  - The switch state is optimistically updated in HA — if the pool controller rejects the
-    command (e.g. pool not connected, access denied) the HA state becomes wrong.
-  - After `SetOut`, call `WaitCommand` and raise a `HomeAssistantError` if status ≠ 9.
-  - Force a coordinator refresh after a successful command so real state is reflected.
+- [x] **[B4] Add `WaitCommand` / `CommandStatus` verification after `SetOut`**
+  - `_set_out()` (internal helper in `klereo_api.py`) calls `SetOut.php` and extracts `cmdID`.
+  - `wait_command(cmd_id)` calls `WaitCommand.php` (blocks server-side until pool controller
+    confirms), then raises `HomeAssistantError` with a human-readable message if status ≠ 9.
+  - `turn_on_device` / `turn_off_device` / `set_pump_speed` all call `_set_out()` then
+    `wait_command()` before returning — so the executor job doesn't unblock until the command
+    is confirmed.  The coordinator refresh therefore sees the correct new state.
+  - This fixes the "switch flips back to off immediately" UI bug for the lighting output
+    (and all other outputs).
 
 - [ ] **[B8] Implement `set_device_mode()` in `KlereoAPI`**
   - Currently an empty stub.
@@ -72,11 +74,11 @@
 
 ## 🟡 Low Priority — Features & UX
 
-- [ ] **[B6] Use semantic names for sensors and switches**
-  - Sensors are currently named `klereo<id>probe<n>` and switches `klereo<id>out<n>`.
-  - Use `probe['type']` (mapped via `getSensorTypes`) and the user-configurable rename fields
-    from `details['IORename']` (array with `ioType`, `ioIndex`, `name`) if present.
-  - Fall back to the type-based name if no custom rename is defined.
+- [~] **[B6] Use semantic names for sensors and switches** *(probes done — switches pending)*
+  - ✅ Probes: `_probe_friendly_name()` in `sensor.py` uses `probe['type']` via `_PROBE_TYPE_NAME`
+    and checks `IORename` (ioType=2) before falling back to the type name.
+  - ❌ Switches: still named `klereo{poolid}out{index}`. Need to apply the output name mapping
+    and check `IORename` (ioType=1) in `switch.py`.
   - Output names from `getOutInfo` style mapping:
     `0`=Lighting, `1`=Filtration, `2`=pH corrector, `3`=Disinfectant, `4`=Heating,
     `5–7`=Aux 1–3, `8`=Flocculant, `9–14`=Aux 4–9, `15`=Hybrid disinfectant.
@@ -86,23 +88,22 @@
   - After entering username + password, call `GetIndex.php` and present a dropdown selector
     populated with `poolNickname (idSystem)` entries.
 
-- [ ] **Group all entities under a single HA Device per pool**
-  - Add a `DeviceInfo` to `KlereoSensor` and `KlereoOut` using `poolNickname` as the device
-    name, `idSystem` as the identifier, and `podSerial` as the hardware serial.
+- [x] **Group all entities under a single HA Device per pool**
+  - `DeviceInfo` with `poolNickname`, `idSystem` identifier, `podSerial` serial, and
+    `manufacturer="Klereo"` is present on all entity classes in `sensor.py` and `switch.py`.
 
-- [ ] **Expose `both` `filteredValue` and `directValue` as separate sensor attributes**
-  - Currently only `filteredValue` is returned as the state.
-  - `directValue` (instantaneous) should be available as an extra state attribute.
-  - Already done partially via `extra_state_attributes` — ensure both fields are always present.
+- [x] **Expose both `filteredValue` and `directValue` as separate sensor entities**
+  - Implemented as two distinct entity classes: `KlereoFilteredSensor` (state = `filteredValue`,
+    attribute = `directValue`) and `KlereoDirectSensor` (state = `directValue`, attribute =
+    `filteredValue`). One of each is registered per probe.
 
 - [ ] **[B9] Proper cleanup in `async_unload_entry`**
   - Currently only removes `hass.data[DOMAIN][entry_id]`.
   - Should also call `coordinator.async_shutdown()` to cancel the background update loop.
 
-- [ ] **[B10] Restore original output mode on turn-off instead of always using `newMode=2`**
-  - `turn_on_device` / `turn_off_device` always send `newMode=2` (Timer).
-  - Should store and restore the previous `mode` from `coordinator.data['outs']`, or default
-    to `newMode=0` (Manual) which is safer.
+- [x] **[B10] Restore original output mode on turn-off instead of always using `newMode=2`**
+  - `turn_on_device` and `turn_off_device` now both send `newMode=0` (Manual), which is the
+    safe default recommended by the TODO. Full mode-restore from coordinator state not needed.
 
 ---
 
@@ -252,31 +253,31 @@ These features exist in `jeedom-klereo` but are not yet implemented in KlereoHAC
   - Returns `cmdID` — verify with `WaitCommand`.
   - Expose as HA `number` entities for outputs that support Timer mode (0, 5–7, 9–14).
 
-- [ ] **Expose `alerts` and `alertCount` from `GetIndex`**
-  - `pool['alerts']` is an array of `{code, param}` objects.
-  - Expose `alertCount` as a sensor and `alerts` as a human-readable string sensor using the
-    alert code table from `jeedom-klereo/core/class/klereo.class.php`.
-  - Full alert code → message mapping is available in the Jeedom source (62 codes, 0–61).
+- [x] **Expose `alerts` and `alertCount` from `GetIndex`**
+  - `KlereoAlertCountSensor` and `KlereoAlertStringSensor` in `sensor.py` expose the count
+    and a human-readable `" || "`-joined string. 40 alert codes mapped in `_ALERT_MAP`.
 
-- [ ] **Expose pool metadata sensors**
-  - `ProductIdx` — pool product range (0=Care/Premium, 1=Kompact M5, 3=Kompact Plus M5,
-    4=Kalypso Pro Salt, 5=Kompact M9, 6=Kompact Plus M9, 7=Kompact Plus M2)
-  - `PumpType` — filtration pump type (0=Generic, 1=KlereoFlô RS485, 2=Pentair bus, 7=None)
-  - `isLowSalt` — electrolyser range (0=5g/h range, 1=2g/h range)
-  - `access` — account access level for this pool
+- [x] **Expose pool metadata sensors**
+  - `ProductIdx`, `PumpType`, and `isLowSalt` are all in `_ENUM_SENSORS` in `sensor.py` with
+    correct value maps. They are registered as `KlereoEnumSensor` entities via `value_fn`.
+  - ⚠️ `access` (pool-level access field) is not yet exposed as a sensor.
 
-- [ ] **Support variable-speed (analogic) filtration pumps**
+- [x] **Support variable-speed (analogic) filtration pumps**
   - When `details['PumpMaxSpeed'] > 1`, the filtration output is an analogue pump.
-  - In this case expose a `number` entity (0 to `PumpMaxSpeed`) instead of a boolean switch
-    for the filtration output, and send the speed value as `newState` in `SetOut`.
+  - `number.py` (`KlereoPumpSpeedNumber`): registers a slider entity with range 0–`PumpMaxSpeed`,
+    reads current speed from `out['realStatus']`, writes via `KlereoAPI.set_pump_speed()`.
+  - `switch.py`: skips out index 1 when `PumpMaxSpeed > 1` (handled by number platform instead).
+  - `klereo_api.py`: new `set_pump_speed(outIdx, speed)` — calls `SetOut.php` with `newMode=0`,
+    `newState=<speed>`.
+  - Tests: `tests/unit/test_number.py` (27 assertions covering state, range, write, device info).
 
 - [ ] **Support output `offDelay` attribute**
   - `out['offDelay']` is returned per output — expose as an extra attribute on the switch
     entity, and implement a `number` entity to write it via `SetAutoOff.php`.
 
-- [ ] **Support `IORename` — user-defined probe and output names**
-  - `details['IORename']` array: `{ioType: 1|2, ioIndex: n, name: "..."}` (1=output, 2=probe)
-  - When present, override the default type-based entity name with the user's custom name.
+- [~] **Support `IORename` — user-defined probe and output names** *(probes done — outputs pending)*
+  - ✅ Probes: `_probe_friendly_name()` checks `IORename` (ioType=2) first.
+  - ❌ Outputs: `switch.py` does not yet consult `IORename` (ioType=1). Linked to [B6] above.
 
 - [ ] **Expose `plans` (time-slot schedules)**
   - `details['plans']` contains `{index, plan64}` entries — base64-encoded 96-bit schedule
@@ -285,16 +286,15 @@ These features exist in `jeedom-klereo` but are not yet implemented in KlereoHAC
   - Expose as extra attribute on filtration/aux switch entities at minimum.
   - Writing schedules back via API would require a `SetPlan`-style endpoint (unknown — research needed).
 
-- [ ] **Add API server maintenance window awareness**
-  - Jeedom skips all API calls during defined maintenance windows (Sun 01:45–04:45,
-    Mon/Tue/Wed/Thu/Sat 01:30–01:35).
-  - KlereoHACS should detect `status: error, detail: maintenance` responses and mark entities
-    as unavailable rather than erroring, then retry after the window ends.
+- [~] **Add API server maintenance window awareness** *(reactive detection done — proactive skip pending)*
+  - ✅ `get_pool()` detects `{"status": "error", "detail": "maintenance"}` and raises
+    `UpdateFailed("Klereo server maintenance")` so the coordinator marks entities unavailable.
+  - ❌ Proactive time-based skip (before even sending the request) is not yet implemented.
+    Jeedom checks the current time against the maintenance windows before calling the API.
 
-- [ ] **Handle `HybrideMode` (hybrid disinfection)**
-  - `details['HybrideMode'] === 1` indicates a hybrid electrolysis + liquid chlorine system.
-  - In this mode use `ExtraParams['HybChl_TodayTime']` / `HybChl_TotalTime` instead of the
-    regular `ElectroChlore_*` params for chlorine consumption sensors.
+- [x] **Handle `HybrideMode` (hybrid disinfection)**
+  - `_chlore_consumed()` in `sensor.py` checks `pool_data['HybrideMode'] == 1` and reads
+    from `ExtraParams['HybChl_TodayTime/TotalTime']` instead of `ElectroChlore_*`.
 
 ---
 

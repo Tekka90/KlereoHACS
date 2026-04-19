@@ -16,6 +16,8 @@ from tests.fixtures import (
     SAMPLE_JWT_RESPONSE,
     SAMPLE_MAINTENANCE_RESPONSE,
     SAMPLE_SET_OUT_RESPONSE,
+    SAMPLE_WAIT_COMMAND_SUCCESS,
+    SAMPLE_WAIT_COMMAND_POOL_NOT_CONNECTED,
 )
 
 # ── URL constants (match klereo_api.py) ──────────────────────────────────────
@@ -23,6 +25,7 @@ JWT_URL = "https://connect.klereo.fr/php/GetJWT.php"
 INDEX_URL = "https://connect.klereo.fr/php/GetIndex.php"
 POOL_URL = "https://connect.klereo.fr/php/GetPoolDetails.php"
 SET_OUT_URL = "https://connect.klereo.fr/php/SetOut.php"
+WAIT_CMD_URL = "https://connect.klereo.fr/php/WaitCommand.php"
 
 
 # ── Shared fixtures ───────────────────────────────────────────────────────────
@@ -162,6 +165,7 @@ class TestGetPool:
 class TestTurnOnDevice:
     def test_sends_out_index_and_state_on(self, authed_api, requests_mock):
         m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
         authed_api.turn_on_device(1)
         body = m.last_request.body or ""
         assert "outIdx=1" in body
@@ -169,12 +173,14 @@ class TestTurnOnDevice:
 
     def test_sends_pool_id(self, authed_api, requests_mock):
         m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
         authed_api.turn_on_device(0)
         body = m.last_request.body or ""
         assert "poolID=12345" in body
 
     def test_sends_auth_header(self, authed_api, requests_mock):
         m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
         authed_api.turn_on_device(0)
         assert m.last_request.headers["Authorization"] == "Bearer test-jwt-token"
 
@@ -189,6 +195,7 @@ class TestTurnOnDevice:
 class TestTurnOffDevice:
     def test_sends_out_index_and_state_off(self, authed_api, requests_mock):
         m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
         authed_api.turn_off_device(1)
         body = m.last_request.body or ""
         assert "outIdx=1" in body
@@ -196,6 +203,7 @@ class TestTurnOffDevice:
 
     def test_sends_pool_id(self, authed_api, requests_mock):
         m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
         authed_api.turn_off_device(0)
         body = m.last_request.body or ""
         assert "poolID=12345" in body
@@ -236,6 +244,7 @@ class TestJwtAutoRefresh:
             {"json": SAMPLE_JWT_EXPIRED_RESPONSE},
             {"json": SAMPLE_SET_OUT_RESPONSE},
         ])
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
         authed_api.turn_on_device(1)
         assert set_mock.call_count == 2
 
@@ -254,24 +263,28 @@ class TestSetOutPayloadCorrectness:
 
     def test_turn_on_uses_manual_mode(self, authed_api, requests_mock):
         m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
         authed_api.turn_on_device(1)
         body = m.last_request.body or ""
         assert "newMode=0" in body, "turn_on must use newMode=0 (Manual), not Timer"
 
     def test_turn_off_uses_manual_mode(self, authed_api, requests_mock):
         m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
         authed_api.turn_off_device(1)
         body = m.last_request.body or ""
         assert "newMode=0" in body, "turn_off must use newMode=0 (Manual), not Timer"
 
     def test_turn_on_sends_com_mode_1(self, authed_api, requests_mock):
         m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
         authed_api.turn_on_device(1)
         body = m.last_request.body or ""
         assert "comMode=1" in body
 
     def test_turn_off_sends_com_mode_1(self, authed_api, requests_mock):
         m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
         authed_api.turn_off_device(1)
         body = m.last_request.body or ""
         assert "comMode=1" in body
@@ -388,3 +401,99 @@ class TestJwtProactiveRefresh:
         assert api.jwt_acquired_at is not None
         assert before <= api.jwt_acquired_at <= after
 
+
+# ── wait_command ──────────────────────────────────────────────────────────────
+
+class TestWaitCommand:
+    def test_returns_success_status_on_code_9(self, authed_api, requests_mock):
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        result = authed_api.wait_command(42)
+        assert result == 9
+
+    def test_sends_cmd_id_in_payload(self, authed_api, requests_mock):
+        m = requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.wait_command(42)
+        assert "cmdID=42" in (m.last_request.body or "")
+
+    def test_sends_auth_header(self, authed_api, requests_mock):
+        m = requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.wait_command(42)
+        assert m.last_request.headers["Authorization"] == "Bearer test-jwt-token"
+
+    def test_raises_home_assistant_error_on_failure_status(self, authed_api, requests_mock):
+        """Status 17 (pool not connected) must raise HomeAssistantError."""
+        from homeassistant.exceptions import HomeAssistantError
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_POOL_NOT_CONNECTED)
+        with pytest.raises(HomeAssistantError, match="Pool not connected"):
+            authed_api.wait_command(42)
+
+    def test_raises_for_each_known_failure_code(self, authed_api, requests_mock):
+        """Every non-9 status code must raise HomeAssistantError."""
+        from homeassistant.exceptions import HomeAssistantError
+        for code in [10, 11, 12, 13, 15, 16, 17, 18, 19]:
+            requests_mock.post(WAIT_CMD_URL, json={"status": "ok", "response": {"status": code, "cmdID": 1}})
+            with pytest.raises(HomeAssistantError):
+                authed_api.wait_command(1)
+
+    def test_raises_on_http_error(self, authed_api, requests_mock):
+        requests_mock.post(WAIT_CMD_URL, status_code=500)
+        with pytest.raises(requests.HTTPError):
+            authed_api.wait_command(42)
+
+
+# ── turn_on_device / turn_off_device (now with WaitCommand) ──────────────────
+
+class TestTurnOnOffWithWaitCommand:
+    def _setup(self, requests_mock, set_out_response=None, wait_response=None):
+        requests_mock.post(
+            SET_OUT_URL,
+            json=set_out_response or SAMPLE_SET_OUT_RESPONSE,
+        )
+        requests_mock.post(
+            WAIT_CMD_URL,
+            json=wait_response or SAMPLE_WAIT_COMMAND_SUCCESS,
+        )
+
+    def test_turn_on_calls_set_out_then_wait_command(self, authed_api, requests_mock):
+        set_out_m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        wait_m = requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.turn_on_device(0)
+        assert set_out_m.call_count == 1
+        assert wait_m.call_count == 1
+
+    def test_turn_on_sends_newstate_1(self, authed_api, requests_mock):
+        self._setup(requests_mock)
+        m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.turn_on_device(0)
+        assert "newState=1" in (m.last_request.body or "")
+
+    def test_turn_off_sends_newstate_0(self, authed_api, requests_mock):
+        self._setup(requests_mock)
+        m = requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.turn_off_device(0)
+        assert "newState=0" in (m.last_request.body or "")
+
+    def test_turn_on_sends_cmd_id_to_wait_command(self, authed_api, requests_mock):
+        """The cmdID returned by SetOut must be forwarded to WaitCommand."""
+        requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)  # cmdID=42
+        wait_m = requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_SUCCESS)
+        authed_api.turn_on_device(0)
+        assert "cmdID=42" in (wait_m.last_request.body or "")
+
+    def test_turn_on_raises_if_pool_not_connected(self, authed_api, requests_mock):
+        """If WaitCommand returns code 17, HomeAssistantError must bubble up."""
+        from homeassistant.exceptions import HomeAssistantError
+        requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=SAMPLE_WAIT_COMMAND_POOL_NOT_CONNECTED)
+        with pytest.raises(HomeAssistantError, match="Pool not connected"):
+            authed_api.turn_on_device(0)
+
+    def test_turn_off_raises_if_command_fails(self, authed_api, requests_mock):
+        from homeassistant.exceptions import HomeAssistantError
+        fail_resp = {"status": "ok", "response": {"status": 10, "cmdID": 42}}  # 10=failed
+        requests_mock.post(SET_OUT_URL, json=SAMPLE_SET_OUT_RESPONSE)
+        requests_mock.post(WAIT_CMD_URL, json=fail_resp)
+        with pytest.raises(HomeAssistantError):
+            authed_api.turn_off_device(0)
