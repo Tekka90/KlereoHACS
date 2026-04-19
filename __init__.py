@@ -11,7 +11,7 @@ from .klereo_api import KlereoAPI
 import logging
 LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "switch", "number"]
+PLATFORMS = ["sensor", "switch", "number", "select"]
 
 async def async_setup(hass: HomeAssistant, config: dict):
     LOGGER.info("Initializing %s integration...",DOMAIN)

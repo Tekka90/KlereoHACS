@@ -264,12 +264,13 @@ These features exist in `jeedom-klereo` but are not yet implemented in KlereoHAC
 
 - [x] **Support variable-speed (analogic) filtration pumps**
   - When `details['PumpMaxSpeed'] > 1`, the filtration output is an analogue pump.
-  - `number.py` (`KlereoPumpSpeedNumber`): registers a slider entity with range 0–`PumpMaxSpeed`,
-    reads current speed from `out['realStatus']`, writes via `KlereoAPI.set_pump_speed()`.
-  - `switch.py`: skips out index 1 when `PumpMaxSpeed > 1` (handled by number platform instead).
-  - `klereo_api.py`: new `set_pump_speed(outIdx, speed)` — calls `SetOut.php` with `newMode=0`,
-    `newState=<speed>`.
-  - Tests: `tests/unit/test_number.py` (27 assertions covering state, range, write, device info).
+  - `select.py` (`KlereoPumpSpeedSelect`): registers a dropdown with one option per speed index
+    (`"Off"`, `"Speed 1"`, …, `"Full speed"`). The number of options is determined entirely by
+    `PumpMaxSpeed` from the API — no percentages or invented labels.
+  - `switch.py`: skips out index 1 when `PumpMaxSpeed > 1` (handled by select platform instead).
+  - `klereo_api.py`: `set_pump_speed(outIdx, speed)` — calls `SetOut.php` with `newMode=0`,
+    `newState=<speed index>`.
+  - Tests: `tests/unit/test_select.py`.
 
 - [ ] **Support output `offDelay` attribute**
   - `out['offDelay']` is returned per output — expose as an extra attribute on the switch
