@@ -12,7 +12,10 @@ set -e
 cd "$(dirname "$0")"
 
 echo ">>> Creating virtual environment..."
-python3 -m venv .venv
+# Run venv creation from a temp directory to prevent the project's select.py / number.py
+# from shadowing Python's own stdlib modules (which are imported during venv bootstrap).
+VENV_ABS="$(pwd)/.venv"
+(cd /tmp && python3 -m venv "$VENV_ABS")
 
 echo ">>> Installing test dependencies..."
 .venv/bin/pip install -q --upgrade pip
