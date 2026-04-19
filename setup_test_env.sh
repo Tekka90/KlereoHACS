@@ -28,6 +28,12 @@ echo "    site-packages: $SITE_PACKAGES"
 # Copy the stub homeassistant package into site-packages
 cp -r tests/ha_stub/homeassistant "$SITE_PACKAGES/"
 
+# Install the integration itself as the 'klereo' package so tests can
+# import it as 'klereo.*' regardless of where the repo is checked out
+# (locally: custom_components/klereo/, CI: repo root directly).
+echo ">>> Installing klereo integration package into venv site-packages..."
+ln -sfn "$(pwd)" "$SITE_PACKAGES/klereo"
+
 echo ""
 echo "✅  Setup complete."
 echo ""
