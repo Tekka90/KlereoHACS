@@ -5,4 +5,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Scaffold custom_components structure for hassfest
+        run: |
+          mkdir -p custom_components/klereo
+          cp -r $(ls | grep -v custom_components) custom_components/klereo/
       - uses: home-assistant/actions/hassfest@master

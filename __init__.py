@@ -3,6 +3,8 @@
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant import config_entries
+import homeassistant.helpers.config_validation as cv
 from datetime import timedelta
 
 from .const import DOMAIN,UPDATE_INTERVAL
@@ -12,6 +14,8 @@ import logging
 LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "switch", "number", "select"]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 async def async_setup(hass: HomeAssistant, config: dict):
     LOGGER.info("Initializing %s integration...",DOMAIN)

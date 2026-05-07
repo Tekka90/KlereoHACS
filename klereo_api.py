@@ -14,6 +14,12 @@ _JWT_EXPIRED_DETAILS = {"jwt expired", "invalid jwt", "jwt invalid", "unauthoriz
 # Re-authenticate when the token is this old — Jeedom uses 55 min (token valid 60 min)
 _JWT_REFRESH_AFTER = timedelta(minutes=55)
 
+# HTTP timeout (connect, read) in seconds. Without this, a stalled Klereo server
+# (e.g. during the nightly maintenance cut) can hang the request — and therefore
+# the DataUpdateCoordinator's refresh task — forever, requiring a reload to recover.
+# (connect, read) tuple per requests' API.
+_HTTP_TIMEOUT = (10, 30)
+
 # Klereo server scheduled maintenance windows (local server time).
 # Format: {weekday: (from_hhmm, to_hhmm)} where weekday follows PHP date('w'):
 #   0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday
@@ -53,12 +59,26 @@ class KlereoAPI:
             'app': 'api'
         }
         try:
-            response = requests.post(url, data=payload)
+            response = requests.post(url, data=payload, timeout=_HTTP_TIMEOUT)
             response.raise_for_status()
+        except requests.HTTPError as exc:
+            # 401 from the auth endpoint means genuinely bad credentials.
+            if exc.response is not None and exc.response.status_code == 401:
+                raise ConfigEntryAuthFailed(f"Klereo authentication failed (HTTP 401): {exc}") from exc
+            # Any other HTTP / network error is transient — let the coordinator retry.
+            from homeassistant.helpers.update_coordinator import UpdateFailed
+            raise UpdateFailed(f"Klereo JWT request failed (transient): {exc}") from exc
         except requests.RequestException as exc:
-            raise ConfigEntryAuthFailed(f"Klereo authentication failed: {exc}") from exc
-        body = response.json()
+            # Connection timeout, DNS failure, etc. — transient, do NOT mark as auth-failed.
+            from homeassistant.helpers.update_coordinator import UpdateFailed
+            raise UpdateFailed(f"Klereo JWT request failed (transient): {exc}") from exc
+        try:
+            body = response.json()
+        except ValueError as exc:
+            from homeassistant.helpers.update_coordinator import UpdateFailed
+            raise UpdateFailed(f"Klereo non-JSON response from GetJWT: {exc}") from exc
         if body.get('status') != 'ok' or not body.get('jwt'):
+            # The server responded but rejected the credentials — this is a real auth failure.
             raise ConfigEntryAuthFailed(
                 f"Klereo authentication failed: {body.get('detail', 'no jwt in response')}"
             )
@@ -116,7 +136,7 @@ class KlereoAPI:
             self.get_jwt()
         headers = {'Authorization': f'Bearer {self.jwt}'}
         try:
-            response = requests.post(url, headers=headers, data=payload or {})
+            response = requests.post(url, headers=headers, data=payload or {}, timeout=_HTTP_TIMEOUT)
             response.raise_for_status()
         except requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 401:
@@ -124,14 +144,19 @@ class KlereoAPI:
             raise UpdateFailed(f"Klereo HTTP error: {exc}") from exc
         except requests.RequestException as exc:
             raise UpdateFailed(f"Klereo request failed: {exc}") from exc
-        body = response.json()
+        try:
+            body = response.json()
+        except ValueError as exc:
+            # Klereo occasionally returns HTML / empty body when the backend is
+            # half-down (e.g. just before/after the nightly maintenance cut).
+            raise UpdateFailed(f"Klereo non-JSON response: {exc}") from exc
         # --- Reactive refresh ---
         if self._is_auth_error(body):
             LOGGER.info("JWT expired — re-authenticating and retrying request")
             self.get_jwt()
             headers = {'Authorization': f'Bearer {self.jwt}'}
             try:
-                response = requests.post(url, headers=headers, data=payload or {})
+                response = requests.post(url, headers=headers, data=payload or {}, timeout=_HTTP_TIMEOUT)
                 response.raise_for_status()
             except requests.HTTPError as exc:
                 if exc.response is not None and exc.response.status_code == 401:
@@ -139,7 +164,10 @@ class KlereoAPI:
                 raise UpdateFailed(f"Klereo HTTP error: {exc}") from exc
             except requests.RequestException as exc:
                 raise UpdateFailed(f"Klereo request failed: {exc}") from exc
-            body = response.json()
+            try:
+                body = response.json()
+            except ValueError as exc:
+                raise UpdateFailed(f"Klereo non-JSON response: {exc}") from exc
         return body
 
     def get_index(self):
